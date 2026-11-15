@@ -1,0 +1,7 @@
+{
+  "version": "v1.19.34",
+  "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-darwin-arm64-v1.19.34.gz",
+  "artifact_sha256": "1a7a20eca63fbbaec90137717465bfde488d0db2a3a79b8fadebf9b2545b6e4c",
+  "binary_sha256": "a55a9073f9b7b1fa596a82c034d2dae3407ec34732102b6e42c5513ce3033f34",
+  "source": "https://github.com/MetaCubeX/mihomo/tree/v1.19.34"
+}
