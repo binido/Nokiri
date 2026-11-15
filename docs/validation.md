@@ -67,3 +67,13 @@ AccessKit, but a full VoiceOver audit was not performed.
 The temporary GUI fixture catalog was removed after verifying that it contained
 only the test server and no subscriptions. Nokiri and its test upstream were
 stopped cleanly; the application is ready for the user's own imports.
+
+## Desktop design follow-up
+
+The subsequent design review added six UI regression tests. The current ordinary
+suite passes 19 tests; the two real-core tests remain separately runnable and
+were not rerun for this UI-only change. Navigation clipping and icon-click tests
+failed before the fix and pass afterward. All pages were rendered at 720x560 and
+980x780 in both themes, including long names. See [design review](design-review.md)
+for findings and direct desktop checks. Current screenshots show the corrected
+first-launch UI with an empty catalog. The macOS app was rebuilt and launched.

@@ -10,7 +10,7 @@
     <a href="assets/MIHOMO-LICENSE"><img src="https://img.shields.io/badge/Mihomo-GPL--3.0-blue" alt="Mihomo core GPL-3.0 license" /></a>
   </p>
   <p><a href="#installation">Install</a> · <a href="#usage">Use Nokiri</a> · <a href="#build-from-source">Build</a> · <a href="#security-and-privacy">Security</a></p>
-  <img src="docs/screenshots/dashboard-dark.png" width="860" alt="Nokiri's actual macOS dashboard with a local VLESS test fixture selected" />
+  <img src="docs/screenshots/dashboard-dark.png" width="860" alt="Nokiri's actual macOS dashboard before importing a server" />
 </div>
 
 Nokiri exposes one local HTTP/SOCKS5 endpoint and keeps your chosen server fixed.
@@ -196,6 +196,8 @@ UI icons are [Material Symbols](https://github.com/google/material-design-icons)
 (Apache-2.0). The repository presentation was inspired by
 [Purge](https://github.com/jithin-sabu/purge-app), with original text and assets.
 
-Screenshots show the implemented application using a local VLESS test fixture,
-not a supplied production subscription. No private endpoints or credentials are
-included. Light mode: [view screenshot](docs/screenshots/dashboard-light.png).
+Screenshots show the implemented application with an empty catalog. Functional
+proxy checks used local fixtures as documented in the validation record. No
+private endpoints or credentials are included. Light mode: [view screenshot](docs/screenshots/dashboard-light.png).
+
+The desktop layout and interaction follow-up is recorded in the [design review](docs/design-review.md).
