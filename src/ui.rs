@@ -106,7 +106,7 @@ impl Nokiri {
         egui::Frame::new()
             .fill(self.surface())
             .corner_radius(20)
-            .inner_margin(24)
+            .inner_margin(18)
     }
     fn available(&self) -> bool {
         self.initialized && !self.snapshot.busy && !self.pending && !self.snapshot.locked
@@ -119,6 +119,11 @@ impl Nokiri {
         } else {
             egui::Visuals::light()
         };
+        style.visuals.override_text_color = Some(if dark {
+            Color32::from_rgb(240, 225, 208)
+        } else {
+            Color32::from_rgb(39, 27, 15)
+        });
         style.visuals.panel_fill = if dark {
             Color32::from_rgb(25, 23, 20)
         } else {
@@ -142,7 +147,7 @@ impl Nokiri {
         style.visuals.widgets.inactive.corner_radius = 10.into();
         style.visuals.widgets.hovered.corner_radius = 10.into();
         style.visuals.widgets.active.corner_radius = 10.into();
-        style.spacing.item_spacing = Vec2::new(12.0, 12.0);
+        style.spacing.item_spacing = Vec2::new(12.0, 8.0);
         style.spacing.button_padding = Vec2::new(16.0, 10.0);
         style.spacing.interact_size.y = 38.0;
         style
@@ -162,7 +167,7 @@ impl Nokiri {
     fn heading(&self, ui: &mut egui::Ui, title: &str, subtitle: &str) {
         ui.heading(title);
         ui.label(RichText::new(subtitle).color(self.muted()));
-        ui.add_space(18.0);
+        ui.add_space(12.0);
     }
     fn primary(&self, ui: &mut egui::Ui, text: &str) -> egui::Response {
         ui.add(
@@ -270,7 +275,7 @@ impl Nokiri {
                     },
                     |s| &s.proxy.name,
                 ))
-                .size(30.0),
+                .size(28.0),
             );
             ui.label(
                 RichText::new(

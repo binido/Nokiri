@@ -15,7 +15,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Nokiri")
-            .with_inner_size([980.0, 720.0])
+            .with_inner_size([980.0, 780.0])
             .with_min_inner_size([720.0, 560.0])
             .with_app_id("io.github.binido.nokiri")
             .with_icon(eframe::egui::IconData {
