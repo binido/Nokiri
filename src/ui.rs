@@ -19,17 +19,24 @@ pub struct Nokiri {
     page: Page,
     search: String,
     import_open: bool,
+    import_pending: bool,
+    import_error: Option<String>,
+    removal: Option<(Action, String)>,
     subscription_mode: bool,
     input: String,
     name: String,
     renames: BTreeMap<String, String>,
-    port: u16,
+    draft: Settings,
+    show_input: bool,
     initialized: bool,
     pending: bool,
     logo: egui::TextureHandle,
 }
 impl Nokiri {
     pub fn new(cc: &eframe::CreationContext<'_>, vault: Vault) -> Self {
+        Self::with_context(cc.egui_ctx.clone(), vault)
+    }
+    fn with_context(ctx: egui::Context, vault: Vault) -> Self {
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "Roboto".into(),
@@ -48,11 +55,11 @@ impl Nokiri {
         fonts
             .families
             .insert(FontFamily::Name("Symbols".into()), vec!["Symbols".into()]);
-        cc.egui_ctx.set_fonts(fonts);
+        ctx.set_fonts(fonts);
         let rgba = image::load_from_memory(include_bytes!("../assets/icons/nokiri.png"))
             .unwrap()
             .into_rgba8();
-        let logo = cc.egui_ctx.load_texture(
+        let logo = ctx.load_texture(
             "Nokiri mark",
             egui::ColorImage::from_rgba_unmultiplied(
                 [rgba.width() as usize, rgba.height() as usize],
@@ -61,16 +68,20 @@ impl Nokiri {
             Default::default(),
         );
         Self {
-            worker: Handle::spawn(vault, cc.egui_ctx.clone()),
+            worker: Handle::spawn(vault, ctx),
             snapshot: Snapshot::default(),
             page: Page::Dashboard,
             search: String::new(),
             import_open: false,
+            import_pending: false,
+            import_error: None,
+            removal: None,
             subscription_mode: true,
             input: String::new(),
             name: String::new(),
             renames: BTreeMap::new(),
-            port: 7890,
+            draft: Settings::default(),
+            show_input: false,
             initialized: false,
             pending: false,
             logo,
@@ -82,21 +93,21 @@ impl Nokiri {
         }
     }
     fn accent(&self) -> Color32 {
-        if self.snapshot.state.settings.dark {
+        if self.draft.dark {
             Color32::from_rgb(255, 180, 91)
         } else {
             Color32::from_rgb(133, 72, 0)
         }
     }
     fn surface(&self) -> Color32 {
-        if self.snapshot.state.settings.dark {
+        if self.draft.dark {
             Color32::from_rgb(38, 35, 31)
         } else {
             Color32::from_rgb(245, 238, 230)
         }
     }
     fn muted(&self) -> Color32 {
-        if self.snapshot.state.settings.dark {
+        if self.draft.dark {
             Color32::from_rgb(193, 183, 170)
         } else {
             Color32::from_rgb(104, 91, 75)
@@ -112,7 +123,7 @@ impl Nokiri {
         self.initialized && !self.snapshot.busy && !self.pending && !self.snapshot.locked
     }
     fn style(&self, ctx: &egui::Context) {
-        let dark = self.snapshot.state.settings.dark;
+        let dark = self.draft.dark;
         let mut style = (*ctx.style()).clone();
         style.visuals = if dark {
             egui::Visuals::dark()
@@ -147,6 +158,7 @@ impl Nokiri {
         style.visuals.widgets.inactive.corner_radius = 10.into();
         style.visuals.widgets.hovered.corner_radius = 10.into();
         style.visuals.widgets.active.corner_radius = 10.into();
+        style.wrap_mode = Some(egui::TextWrapMode::Wrap);
         style.spacing.item_spacing = Vec2::new(12.0, 8.0);
         style.spacing.button_padding = Vec2::new(16.0, 10.0);
         style.spacing.interact_size.y = 38.0;
@@ -170,26 +182,47 @@ impl Nokiri {
         ui.add_space(12.0);
     }
     fn primary(&self, ui: &mut egui::Ui, text: &str) -> egui::Response {
-        ui.add(
-            egui::Button::new(
-                RichText::new(text).color(if self.snapshot.state.settings.dark {
+        ui.scope(|ui| {
+            let accent = self.accent();
+            let visuals = ui.visuals_mut();
+            visuals.widgets.inactive.weak_bg_fill = accent;
+            visuals.widgets.hovered.weak_bg_fill = if self.draft.dark {
+                Color32::from_rgb(255, 199, 133)
+            } else {
+                Color32::from_rgb(112, 59, 0)
+            };
+            visuals.widgets.active.weak_bg_fill = if self.draft.dark {
+                Color32::from_rgb(235, 154, 61)
+            } else {
+                Color32::from_rgb(92, 48, 0)
+            };
+            for widget in [
+                &mut visuals.widgets.inactive,
+                &mut visuals.widgets.hovered,
+                &mut visuals.widgets.active,
+            ] {
+                widget.bg_stroke = egui::Stroke::NONE;
+            }
+            ui.add(
+                egui::Button::new(RichText::new(text).color(if self.draft.dark {
                     Color32::from_rgb(67, 35, 0)
                 } else {
                     Color32::WHITE
-                }),
+                }))
+                .corner_radius(24),
             )
-            .fill(self.accent())
-            .corner_radius(24),
-        )
+        })
+        .inner
     }
     fn navigation(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("navigation")
-            .exact_width(180.0)
+            .exact_width(216.0)
             .resizable(false)
+            .show_separator_line(false)
             .frame(egui::Frame::new().fill(self.surface()).inner_margin(18))
             .show(ctx, |ui| {
                 ui.add_space(14.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.image((self.logo.id(), Vec2::splat(34.0)));
                     ui.label(RichText::new("Nokiri").size(23.0).strong());
                 });
@@ -201,26 +234,28 @@ impl Nokiri {
                     (Page::Settings, '\u{e8b8}', "Settings"),
                 ] {
                     let active = self.page == page;
-                    let response = egui::Frame::new()
-                        .fill(if active {
-                            ui.visuals().selection.bg_fill
-                        } else {
-                            Color32::TRANSPARENT
-                        })
-                        .corner_radius(24)
-                        .inner_margin(egui::Margin::symmetric(12, 4))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(symbol.to_string())
-                                        .font(FontId::new(21.0, FontFamily::Name("Symbols".into())))
-                                        .color(if active { self.accent() } else { self.muted() }),
-                                );
-                                ui.selectable_label(active, label)
-                            })
-                            .inner
-                        })
-                        .inner;
+                    let response = ui.add_sized(
+                        [ui.available_width(), 48.0],
+                        egui::Button::selectable(
+                            active,
+                            (
+                                RichText::new(symbol.to_string())
+                                    .font(FontId::new(21.0, FontFamily::Name("Symbols".into())))
+                                    .color(if active { self.accent() } else { self.muted() }),
+                                RichText::new(label),
+                                egui::Atom::grow(),
+                            ),
+                        )
+                        .corner_radius(24),
+                    );
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            ui.is_enabled(),
+                            active,
+                            label,
+                        )
+                    });
                     if response.clicked() {
                         self.page = page;
                     }
@@ -247,7 +282,7 @@ impl Nokiri {
         );
         self.card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let color = if self.snapshot.running {
                     self.accent()
                 } else {
@@ -286,41 +321,46 @@ impl Nokiri {
                 .color(self.muted()),
             );
             ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(self.available(), |ui| {
-                    if self
-                        .primary(
-                            ui,
-                            if self.snapshot.running {
-                                "Stop proxy"
+            ui.horizontal_wrapped(|ui| {
+                ui.add_enabled_ui(
+                    self.available()
+                        && (self.snapshot.running
+                            || self.snapshot.state.selected_server().is_some()),
+                    |ui| {
+                        if self
+                            .primary(
+                                ui,
+                                if self.snapshot.running {
+                                    "Stop proxy"
+                                } else {
+                                    "Start proxy"
+                                },
+                            )
+                            .clicked()
+                        {
+                            self.send(if self.snapshot.running {
+                                Action::Stop
                             } else {
-                                "Start proxy"
-                            },
-                        )
-                        .clicked()
-                    {
-                        self.send(if self.snapshot.running {
-                            Action::Stop
-                        } else {
-                            Action::Start
-                        });
-                    }
-                    if ui.button("Choose server").clicked() {
-                        self.page = Page::Servers;
-                    }
-                });
+                                Action::Start
+                            });
+                        }
+                    },
+                );
+                if ui.button("Choose server").clicked() {
+                    self.page = Page::Servers;
+                }
             });
         });
         ui.add_space(8.0);
         self.card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new("Local proxy").size(19.0));
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(format!("127.0.0.1:{}", self.snapshot.state.settings.port))
                         .size(23.0),
                 );
-                if ui.small_button("Copy URL").clicked() {
+                if ui.button("Copy URL").clicked() {
                     ui.ctx().copy_text(format!(
                         "http://127.0.0.1:{}",
                         self.snapshot.state.settings.port
@@ -350,7 +390,7 @@ impl Nokiri {
                 RichText::new("Tests make an HTTPS request through your selected proxy.")
                     .color(self.muted()),
             );
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(self.available() && self.snapshot.running, |ui| {
                     if ui.button("Test HTTPS").clicked() {
                         self.send(Action::Connectivity(false));
@@ -367,15 +407,14 @@ impl Nokiri {
     }
     fn servers(&mut self, ui: &mut egui::Ui) {
         self.heading(ui, "Servers", "Selection stays fixed until you change it.");
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text("Search servers or sources")
-                    .desired_width(260.0),
+                    .desired_width((ui.available_width() - 200.0).clamp(140.0, 260.0)),
             );
             if ui.button("Import").clicked() {
-                self.import_open = true;
-                self.subscription_mode = false;
+                self.open_import(false);
             }
             ui.add_enabled_ui(
                 self.available() && !self.snapshot.state.servers.is_empty(),
@@ -425,27 +464,24 @@ impl Nokiri {
                 .inner_margin(18)
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(&server.proxy.name).size(18.0).strong());
-                            ui.label(
-                                RichText::new(format!(
-                                    "{source}  /  VLESS {}{}  /  {}",
-                                    server.proxy.network.to_uppercase(),
-                                    if server.proxy.reality_opts.is_some() {
-                                        " + REALITY"
-                                    } else if server.proxy.tls {
-                                        " + TLS"
-                                    } else {
-                                        ""
-                                    },
-                                    &server.id[..6]
-                                ))
-                                .small()
-                                .color(self.muted()),
-                            );
-                        });
-                    });
+
+                    ui.label(RichText::new(&server.proxy.name).size(18.0).strong());
+                    ui.label(
+                        RichText::new(format!(
+                            "{source}  /  VLESS {}{}  /  {}",
+                            server.proxy.network.to_uppercase(),
+                            if server.proxy.reality_opts.is_some() {
+                                " + REALITY"
+                            } else if server.proxy.tls {
+                                " + TLS"
+                            } else {
+                                ""
+                            },
+                            &server.id[..6]
+                        ))
+                        .small()
+                        .color(self.muted()),
+                    );
                     if let Some(check) = self.snapshot.checks.get(&server.id) {
                         let status = if check.testing {
                             "Testing...".into()
@@ -475,7 +511,7 @@ impl Nokiri {
                     } else {
                         ui.label(RichText::new("Not tested").small().color(self.muted()));
                     }
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.add_enabled_ui(self.available(), |ui| {
                             if ui
                                 .selectable_label(
@@ -491,11 +527,14 @@ impl Nokiri {
                             {
                                 self.send(Action::Select(server.id.clone()));
                             }
-                            if ui.small_button("Test").clicked() {
+                            if ui.button("Test").clicked() {
                                 self.send(Action::Test(vec![server.id.clone()]));
                             }
-                            if server.source == "manual" && ui.small_button("Remove").clicked() {
-                                self.send(Action::RemoveServer(server.id.clone()));
+                            if server.source == "manual" && ui.button("Remove").clicked() {
+                                self.removal = Some((
+                                    Action::RemoveServer(server.id.clone()),
+                                    server.proxy.name.clone(),
+                                ));
                             }
                         });
                     });
@@ -515,14 +554,12 @@ impl Nokiri {
             "Subscriptions",
             "Updates are manual. Credentials stay private.",
         );
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if self.primary(ui, "Add subscription").clicked() {
-                self.import_open = true;
-                self.subscription_mode = true;
+                self.open_import(true);
             }
             if ui.button("Import VLESS / YAML").clicked() {
-                self.import_open = true;
-                self.subscription_mode = false;
+                self.open_import(false);
             }
         });
         ui.add_space(8.0);
@@ -556,7 +593,7 @@ impl Nokiri {
                     );
                 }
                 ui.add_enabled_ui(self.available(), |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if ui.button("Update").clicked() {
                             self.send(Action::Update(sub.id.clone()));
                         }
@@ -564,12 +601,15 @@ impl Nokiri {
                             self.renames.insert(sub.id.clone(), sub.name.clone());
                         }
                         if ui.button("Remove").clicked() {
-                            self.send(Action::RemoveSubscription(sub.id.clone()));
+                            self.removal = Some((
+                                Action::RemoveSubscription(sub.id.clone()),
+                                sub.name.clone(),
+                            ));
                         }
                     });
                     if let Some(name) = self.renames.get_mut(&sub.id) {
                         let mut save = false;
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.text_edit_singleline(name);
                             save = ui.button("Save name").clicked();
                         });
@@ -587,31 +627,31 @@ impl Nokiri {
         self.card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new("Local endpoint").size(20.0));
-            ui.horizontal(|ui| {
-                ui.label("Mixed proxy port");
-                ui.add(egui::DragValue::new(&mut self.port).range(1..=65535));
+            ui.horizontal_wrapped(|ui| {
+                let label = ui.label("Mixed proxy port");
+                ui.add(egui::DragValue::new(&mut self.draft.port).range(1..=65535))
+                    .labelled_by(label.id);
             });
             ui.label(
                 RichText::new("Bound to 127.0.0.1. Changing the port restarts a running proxy.")
                     .small()
                     .color(self.muted()),
             );
-            let mut dark = self.snapshot.state.settings.dark;
-            let mut start = self.snapshot.state.settings.start_on_launch;
+            let mut dark = self.draft.dark;
+            let mut start = self.draft.start_on_launch;
             ui.checkbox(&mut dark, "Dark theme");
             ui.checkbox(&mut start, "Start the selected proxy when Nokiri opens");
             ui.add_enabled_ui(self.available(), |ui| {
                 if self.primary(ui, "Save settings").clicked() {
                     self.send(Action::Settings(Settings {
-                        port: self.port,
+                        port: self.draft.port,
                         dark,
                         start_on_launch: start,
                     }));
                 }
             });
-            // Checkbox edits survive until the Save settings action reaches the worker.
-            self.snapshot.state.settings.dark = dark;
-            self.snapshot.state.settings.start_on_launch = start;
+            self.draft.dark = dark;
+            self.draft.start_on_launch = start;
         });
         ui.add_space(8.0);
         self.card().show(ui, |ui| {
@@ -664,47 +704,122 @@ impl Nokiri {
             ui.label(RichText::new(body).color(self.muted()));
         });
     }
+    fn open_import(&mut self, subscription: bool) {
+        self.subscription_mode = subscription;
+        self.import_open = true;
+        self.import_error = None;
+    }
+    fn close_import(&mut self) {
+        if self.import_error.is_some() {
+            self.snapshot.error = false;
+            self.snapshot.message.clear();
+        }
+        self.import_open = false;
+        self.input.clear();
+        self.name.clear();
+        self.show_input = false;
+        self.import_error = None;
+    }
     fn import_dialog(&mut self, ctx: &egui::Context) {
         if !self.import_open {
             return;
         }
-        let mut open = true;
-        egui::Window::new(if self.subscription_mode { "Add subscription" } else { "Import servers" }).open(&mut open).collapsible(false).resizable(false).default_width(470.0).anchor(egui::Align2::CENTER_CENTER,Vec2::ZERO).show(ctx,|ui| {
-            if self.subscription_mode {
-                ui.label("Subscription name"); ui.text_edit_singleline(&mut self.name);
-                ui.label("HTTPS subscription URL"); ui.add(egui::TextEdit::singleline(&mut self.input).password(true).hint_text("https://provider.example/sub/...").desired_width(f32::INFINITY));
-                ui.label(RichText::new("Fetched directly from the provider. Redirects are refused.").small().color(self.muted()));
-            } else {
-                ui.label("Paste VLESS URLs, Base64 URLs, or Clash YAML");
-                ui.add(egui::TextEdit::multiline(&mut self.input).password(true).desired_rows(7).desired_width(f32::INFINITY));
-                ui.label(RichText::new("VLESS over TCP, WebSocket or gRPC. TLS and REALITY supported. Other protocols and transport extensions are rejected.").small().color(self.muted()));
-            }
-            ui.label(RichText::new("Your catalog is encrypted with a key in the system credential store.").small().color(self.muted()));
-            ui.add_enabled_ui(self.available() && !self.input.trim().is_empty(),|ui| {
-                if self.primary(ui,"Import").clicked() {
-                    let action=if self.subscription_mode { Action::AddSubscription(self.name.trim().into(),self.input.trim().into()) } else { Action::Import(self.input.trim().into()) };
-                    self.send(action); self.input.clear(); self.name.clear(); self.import_open=false;
-                }
+        let mut cancel = false;
+        let response = egui::Modal::new(egui::Id::new("import_servers"))
+            .frame(self.card())
+            .show(ctx, |ui| {
+                ui.set_width(470.0_f32.min(ctx.content_rect().width() - 72.0));
+                ui.heading(if self.subscription_mode { "Add subscription" } else { "Import servers" });
+                egui::ScrollArea::vertical().max_height((ctx.content_rect().height()-220.0).max(160.0)).show(ui, |ui| {
+                    ui.add_enabled_ui(!self.import_pending, |ui| {
+                        if self.subscription_mode {
+                            let label=ui.label("Subscription name");
+                            ui.add(egui::TextEdit::singleline(&mut self.name).hint_text("Personal servers").desired_width(f32::INFINITY)).labelled_by(label.id);
+                            let label=ui.label("HTTPS subscription URL");
+                            ui.add(egui::TextEdit::singleline(&mut self.input).password(!self.show_input).hint_text("https://provider.example/sub/...").desired_width(f32::INFINITY)).labelled_by(label.id);
+                            ui.label(RichText::new("Fetched directly from the provider. Redirects are refused.").small().color(self.muted()));
+                        } else {
+                            let label=ui.label("Paste VLESS URLs, Base64 URLs, or Clash YAML");
+                            egui::ScrollArea::vertical().id_salt("import_text").max_height(180.0).show(ui,|ui| {
+                                ui.add(egui::TextEdit::multiline(&mut self.input).password(!self.show_input).desired_rows(6).desired_width(f32::INFINITY)).labelled_by(label.id);
+                            });
+                            ui.label(RichText::new("VLESS over TCP, WebSocket or gRPC. TLS and REALITY supported. Other protocols and transport extensions are rejected.").small().color(self.muted()));
+                        }
+                        ui.checkbox(&mut self.show_input,"Show contents");
+                    });
+                    ui.label(RichText::new("Your catalog is encrypted with a key in the system credential store.").small().color(self.muted()));
+                    if let Some(error)=&self.import_error { ui.colored_label(self.error_color(), error); }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_enabled_ui(self.available() && !self.input.trim().is_empty() && (!self.subscription_mode || !self.name.trim().is_empty()),|ui| {
+                        if self.primary(ui,"Import").clicked() {
+                            let action=if self.subscription_mode { Action::AddSubscription(self.name.trim().into(),self.input.trim().into()) } else { Action::Import(self.input.trim().into()) };
+                            self.send(action);
+                            self.import_pending=self.pending;
+                        }
+                    });
+                    if self.import_pending { ui.spinner(); ui.label("Importing..."); }
+                    else if ui.button("Cancel").clicked() { cancel=true; }
+                });
+            });
+        if !self.import_pending && (cancel || response.should_close()) {
+            self.close_import();
+        }
+    }
+    fn error_color(&self) -> Color32 {
+        if self.draft.dark {
+            Color32::from_rgb(255, 180, 171)
+        } else {
+            Color32::from_rgb(160, 28, 20)
+        }
+    }
+    fn removal_dialog(&mut self, ctx: &egui::Context) {
+        let Some((_, name)) = &self.removal else {
+            return;
+        };
+        let name = name.clone();
+        let mut remove = false;
+        let mut cancel = false;
+        let response=egui::Modal::new(egui::Id::new("confirm_removal")).frame(self.card()).show(ctx,|ui| {
+            ui.set_width(400.0_f32.min(ctx.content_rect().width()-72.0));
+            ui.heading("Remove from Nokiri?");
+            ui.label(&name);
+            ui.label("This removes the saved entry and its servers. Removing the selected server stops the proxy. You will need the original URL to import it again.");
+            ui.horizontal_wrapped(|ui| {
+                remove=self.primary(ui,"Remove").clicked();
+                cancel=ui.button("Cancel").clicked();
             });
         });
-        if !open {
-            self.import_open = false;
-            self.input.clear();
-            self.name.clear();
+        if remove {
+            if let Some((action, _)) = self.removal.take() {
+                self.send(action);
+            }
+        } else if cancel || response.should_close() {
+            self.removal = None;
         }
     }
 }
-impl eframe::App for Nokiri {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl Nokiri {
+    fn receive_snapshot(&mut self, snapshot: Snapshot) {
+        if !self.initialized || self.draft == self.snapshot.state.settings {
+            self.draft = snapshot.state.settings.clone();
+        }
+        self.initialized = true;
+        if !snapshot.busy {
+            self.pending = false;
+        }
+        if self.import_pending && !snapshot.busy {
+            self.import_pending = false;
+            self.import_error = snapshot.error.then(|| snapshot.message.clone());
+            if !snapshot.error {
+                self.close_import();
+            }
+        }
+        self.snapshot = snapshot;
+    }
+    fn render(&mut self, ctx: &egui::Context) {
         while let Ok(snapshot) = self.worker.rx.try_recv() {
-            if !self.initialized {
-                self.port = snapshot.state.settings.port;
-                self.initialized = true;
-            }
-            if !snapshot.busy {
-                self.pending = false;
-            }
-            self.snapshot = snapshot;
+            self.receive_snapshot(snapshot);
         }
         self.style(ctx);
         self.navigation(ctx);
@@ -728,11 +843,7 @@ impl eframe::App for Nokiri {
                             &self.snapshot.message
                         })
                         .color(if self.snapshot.error {
-                            if self.snapshot.state.settings.dark {
-                                Color32::from_rgb(255, 180, 171)
-                            } else {
-                                Color32::from_rgb(160, 28, 20)
-                            }
+                            self.error_color()
                         } else {
                             self.muted()
                         }),
@@ -756,6 +867,12 @@ impl eframe::App for Nokiri {
                     });
             });
         self.import_dialog(ctx);
+        self.removal_dialog(ctx);
+    }
+}
+impl eframe::App for Nokiri {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.render(ctx);
     }
 }
 fn age(timestamp: u64) -> String {
@@ -768,5 +885,256 @@ fn age(timestamp: u64) -> String {
         format!("{} h ago", seconds / 3600)
     } else {
         format!("{} days ago", seconds / 86400)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nokiri::platform::SecretStore;
+    struct NoSecrets;
+    impl SecretStore for NoSecrets {
+        fn key(&self, _: bool) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("UI rendering must not read credentials")
+        }
+    }
+    pub(super) fn app() -> (tempfile::TempDir, egui::Context, Nokiri) {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Nokiri::with_context(
+            ctx.clone(),
+            Vault::new(dir.path().join("catalog.enc"), Box::new(NoSecrets)),
+        );
+        let snapshot = app
+            .worker
+            .rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        app.receive_snapshot(snapshot);
+        (dir, ctx, app)
+    }
+    pub(super) fn frame(
+        app: &mut Nokiri,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(980.0, 780.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.render(ctx),
+        )
+    }
+    #[test]
+    fn sidebar_background_covers_its_reserved_width() {
+        let (_dir, ctx, mut app) = app();
+        let output = frame(&mut app, &ctx, vec![]);
+        let sidebar = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.rect.min == egui::Pos2::ZERO && rect.fill == app.surface() =>
+                {
+                    Some((rect.rect, shape.clip_rect))
+                }
+                _ => None,
+            })
+            .expect("sidebar surface");
+        assert!(
+            sidebar.0.right() <= sidebar.1.right() + 1.0,
+            "Sidebar reserves {} px but paints only {} px",
+            sidebar.0.right(),
+            sidebar.1.right()
+        );
+    }
+    #[test]
+    fn navigation_icon_is_part_of_the_click_target() {
+        let (_dir, ctx, mut app) = app();
+        let output = frame(&mut app, &ctx, vec![]);
+        let label = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text.ends_with("Subscriptions") => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .expect("subscription navigation label");
+        let pos = egui::pos2(40.0, label.center().y);
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert!(
+            app.page == Page::Subscriptions,
+            "Clicking the icon must select its page"
+        );
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::tests::{app, frame};
+    use super::*;
+    #[test]
+    fn all_pages_keep_surfaces_inside_the_viewport_with_long_names() {
+        let (_dir, ctx, mut app) = app();
+        frame(&mut app, &ctx, vec![]);
+        app.initialized = true;
+        let mut proxy = nokiri::subscription::parse_vless(
+            "vless://00000000-0000-4000-8000-000000000001@127.0.0.1:12345#Fixture",
+        )
+        .unwrap();
+        proxy.name = "LongServerName".repeat(18);
+        app.snapshot.state.replace_source("fixture", vec![proxy]);
+        app.snapshot.state.selected = Some(app.snapshot.state.servers[0].id.clone());
+        app.snapshot
+            .state
+            .subscriptions
+            .push(nokiri::model::Subscription {
+                id: "fixture".into(),
+                name: "LongSubscriptionName".repeat(6),
+                url: "https://example.invalid/fixture".into(),
+                updated: None,
+                status: "Not updated".into(),
+            });
+        for dark in [true, false] {
+            app.draft.dark = dark;
+            for size in [Vec2::new(720.0, 560.0), Vec2::new(980.0, 780.0)] {
+                for page in [
+                    Page::Dashboard,
+                    Page::Servers,
+                    Page::Subscriptions,
+                    Page::Settings,
+                ] {
+                    app.page = page;
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ctx| app.render(ctx),
+                    );
+                    for shape in output.shapes {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && (text.galley.job.text.contains("LongServerName")
+                                || text.galley.job.text.contains("LongSubscriptionName"))
+                        {
+                            assert!(
+                                text.pos.x + text.galley.size().x <= shape.clip_rect.right() + 1.0,
+                                "Long names must wrap inside their card"
+                            );
+                        }
+                        if let egui::Shape::Rect(rect) = shape.shape
+                            && (rect.fill == app.surface()
+                                || rect.fill == ctx.style().visuals.selection.bg_fill)
+                        {
+                            assert!(
+                                rect.rect.right() <= shape.clip_rect.right() + 1.0,
+                                "Surface overflows its painted area: {:?} / {:?}",
+                                rect.rect,
+                                shape.clip_rect
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod form_tests {
+    use super::tests::{app, frame};
+    use super::*;
+    #[test]
+    fn settings_draft_survives_status_updates_without_mutating_saved_settings() {
+        let (_dir, _, mut app) = app();
+        let saved = app.snapshot.state.settings.clone();
+        app.draft.port = 8888;
+        app.draft.dark = !saved.dark;
+        let update = Snapshot {
+            message: "Connection checked".into(),
+            ..app.snapshot.clone()
+        };
+        app.receive_snapshot(update);
+        assert!(app.snapshot.state.settings == saved);
+        assert_eq!(app.draft.port, 8888);
+        assert_ne!(app.draft.dark, saved.dark);
+    }
+    #[test]
+    fn failed_import_keeps_the_dialog_and_input_for_correction() {
+        let (_dir, ctx, mut app) = app();
+        app.open_import(false);
+        app.input = "invalid input".into();
+        app.import_pending = true;
+        app.receive_snapshot(Snapshot {
+            error: true,
+            message: "Expected a VLESS URL".into(),
+            ..Default::default()
+        });
+        assert!(app.import_open);
+        assert_eq!(app.input, "invalid input");
+        assert_eq!(app.import_error.as_deref(), Some("Expected a VLESS URL"));
+        let output = frame(&mut app, &ctx, vec![]);
+        assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="Expected a VLESS URL")));
+    }
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use super::tests::{app, frame};
+    use super::*;
+    #[test]
+    fn canceling_removal_does_not_send_a_delete_action() {
+        let (_dir, ctx, mut app) = app();
+        app.removal = Some((
+            Action::RemoveSubscription("fixture".into()),
+            "Fixture".into(),
+        ));
+        frame(&mut app, &ctx, vec![]);
+        let output = frame(&mut app, &ctx, vec![]);
+        assert!(!app.pending);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Cancel" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("removal cancellation button");
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert!(app.removal.is_none());
+        assert!(!app.pending, "Cancel must never queue a deletion");
     }
 }

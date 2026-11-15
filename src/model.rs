@@ -99,7 +99,7 @@ pub struct State {
     pub selected: Option<String>,
     pub settings: Settings,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
     pub port: u16,
