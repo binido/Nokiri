@@ -310,17 +310,14 @@ impl Worker {
                 self.snapshot.message = "Settings saved.".into();
             }
             Action::Test(ids) => {
-                // Tests use isolated cores when the main proxy is stopped, without selecting a routing server.
                 let mut temporary = None;
                 if !self.engine.running() {
-                    let Some(server) = candidate.servers.first() else {
+                    if candidate.servers.is_empty() {
                         bail!("Import a server before testing.");
-                    };
-                    candidate.selected = Some(server.id.clone());
-                    candidate.settings.port = free_port()?;
+                    }
                     let mut core =
                         Mihomo::new(engine::core_path()?, engine::manifest().binary_sha256);
-                    core.start(&candidate).await?;
+                    core.start_probe(&candidate).await?;
                     temporary = Some(core);
                 }
                 let controller = temporary
@@ -380,8 +377,75 @@ fn validate_name(name: &str) -> Result<()> {
     }
     Ok(())
 }
-fn free_port() -> Result<u16> {
-    Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?
-        .local_addr()?
-        .port())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::SecretStore;
+    struct Secrets;
+    impl SecretStore for Secrets {
+        fn key(&self, _: bool) -> Result<Vec<u8>> {
+            Ok(vec![7; 32])
+        }
+    }
+    fn worker(path: &std::path::Path) -> Worker {
+        let mut state = State::default();
+        let proxy = subscription::parse_vless(
+            "vless://00000000-0000-4000-8000-000000000001@127.0.0.1:12345#Fixture",
+        )
+        .unwrap();
+        state.replace_source("fixture", vec![proxy]);
+        state.selected = Some(state.servers[0].id.clone());
+        state.subscriptions.push(Subscription {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            url: "https://127.0.0.1:1/private-token".into(),
+            updated: Some(1),
+            status: "Previous success".into(),
+        });
+        let (updates, _) = mpsc::channel();
+        Worker {
+            vault: Vault::new(path.join("vault.enc"), Box::new(Secrets)),
+            snapshot: Snapshot {
+                state,
+                ..Default::default()
+            },
+            engine: Mihomo::new(path.join("missing-core"), String::new()),
+            updates,
+            ctx: eframe::egui::Context::default(),
+        }
+    }
+    #[tokio::test]
+    async fn failed_subscription_update_keeps_previous_servers_selection_and_success_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = worker(dir.path());
+        let before = serde_json::to_value(&worker.snapshot.state.servers).unwrap();
+        let selected = worker.snapshot.state.selected.clone();
+        let error = worker
+            .execute(Action::Update("fixture".into()))
+            .await
+            .unwrap_err();
+        assert!(!error.to_string().contains("private-token"));
+        assert_eq!(
+            serde_json::to_value(&worker.snapshot.state.servers).unwrap(),
+            before
+        );
+        assert_eq!(worker.snapshot.state.selected, selected);
+        assert_eq!(worker.snapshot.state.subscriptions[0].updated, Some(1));
+        assert_eq!(worker.vault.load().unwrap().selected, selected);
+    }
+    #[tokio::test]
+    async fn removing_selected_subscription_persists_an_explicit_missing_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = worker(dir.path());
+        let selected = worker.snapshot.state.selected.clone();
+        let error = worker
+            .execute(Action::RemoveSubscription("fixture".into()))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("selected server was removed"));
+        assert_eq!(worker.snapshot.state.selected, selected);
+        assert!(worker.snapshot.state.selected_server().is_none());
+        assert!(worker.vault.load().unwrap().selected_server().is_none());
+        assert!(!worker.engine.running());
+    }
 }

@@ -75,6 +75,13 @@ impl Mihomo {
             version: String::new(),
         }
     }
+    pub async fn start_probe(&mut self, state: &State) -> Result<()> {
+        let result = self.launch(state, true).await;
+        if result.is_err() {
+            self.stop().await?;
+        }
+        result
+    }
     pub fn running(&self) -> bool {
         self.child.is_some()
     }
@@ -111,17 +118,26 @@ impl Mihomo {
         }
         Ok(())
     }
-    async fn launch(&mut self, state: &State) -> Result<()> {
+    async fn launch(&mut self, state: &State, probe: bool) -> Result<()> {
         if self.running() {
             bail!("The proxy engine is already running.");
         }
-        let proxy_probe = std::net::TcpListener::bind(("127.0.0.1", state.settings.port)).context(
+        let proxy_probe =
+            if probe {
+                None
+            } else {
+                Some(std::net::TcpListener::bind(("127.0.0.1", state.settings.port)).context(
             "Local proxy port is in use or unavailable. Choose another port in Settings.",
-        )?;
+        )?)
+            };
         let controller_probe = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         let port = controller_probe.local_addr()?.port();
         let secret = uuid::Uuid::new_v4().to_string();
-        let yaml = config::generate(state, port, &secret)?;
+        let yaml = if probe {
+            config::generate_probe(state, port, &secret)?
+        } else {
+            config::generate(state, port, &secret)?
+        };
         let runtime = tempfile::Builder::new().prefix("nokiri-").tempdir()?;
         let path = runtime.path().join("config.yaml");
         atomic_write(&path, yaml.as_bytes())?;
@@ -212,12 +228,14 @@ impl Mihomo {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        let selected = state.selected_server().unwrap();
-        self.controller
-            .as_ref()
-            .unwrap()
-            .select(&selected.id)
-            .await?;
+        if !probe {
+            let selected = state.selected_server().unwrap();
+            self.controller
+                .as_ref()
+                .unwrap()
+                .select(&selected.id)
+                .await?;
+        }
         Ok(())
     }
 }
@@ -226,7 +244,7 @@ impl ProxyEngine for Mihomo {
         if self.running() {
             bail!("The proxy engine is already running.");
         }
-        let result = self.launch(state).await;
+        let result = self.launch(state, false).await;
         if result.is_err() {
             self.stop().await?;
         }
@@ -253,6 +271,9 @@ impl ProxyEngine for Mihomo {
     fn poll(&mut self) -> Result<bool> {
         if let Some(child) = &mut self.child {
             if let Some(status) = child.try_wait()? {
+                for reader in self.readers.drain(..) {
+                    reader.abort();
+                }
                 self.child.take();
                 self.controller = None;
                 self.runtime.take();

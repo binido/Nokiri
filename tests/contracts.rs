@@ -231,3 +231,16 @@ async fn proxied_connectivity_has_a_real_timeout() {
     assert!(start.elapsed() < Duration::from_secs(2));
     stall.abort();
 }
+
+#[test]
+fn testing_without_selection_opens_no_proxy_listener_and_rejects_routing() {
+    let mut state = state();
+    state.selected = None;
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(&config::generate_probe(&state, free_port(), "probe").unwrap())
+            .unwrap();
+    assert_eq!(value["mixed-port"].as_u64(), Some(0));
+    assert!(value["proxy-groups"].as_sequence().unwrap().is_empty());
+    assert_eq!(value["rules"][0].as_str(), Some("MATCH,REJECT"));
+    assert_eq!(value["proxies"].as_sequence().unwrap().len(), 1);
+}
