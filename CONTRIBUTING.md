@@ -26,13 +26,13 @@ access again. Do not delete a user's encrypted catalog to resolve access errors.
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
-cargo test --locked --test real_core -- --ignored
+cargo test --locked --test real_core --test protocols -- --ignored
 python3 scripts/package_macos.py
 ```
 
 Ordinary tests are offline and never read the system Keychain. Real-core tests
 require the verified ARM64 core, OpenSSL and Python 3. They generate ephemeral
-certificates and local VLESS/HTTPS fixtures. They do not require a paid proxy or
+certificates and local protocol/HTTPS fixtures. They do not require a paid proxy or
 user credentials. Tests exercise public behavior rather than copying the parser.
 
 ## Architecture boundaries

@@ -36,12 +36,14 @@ stops and asks you to select a valid server explicitly.
 
 ## Installation
 
-This is the initial source release; no public binary release is published by
-this implementation. On an Apple Silicon Mac, build `dist/Nokiri.app` using the
-instructions below, then open it in Finder. You may copy the bundle into
-`~/Applications`. It locates its bundled core independently of the repository.
+Download the Apple Silicon DMG from [GitHub Releases](https://github.com/binido/Nokiri/releases).
+Open it and drag Nokiri into Applications. The first release is built on macOS 26
+for ARM64; there is no Intel or Linux application download. You can also build
+`dist/Nokiri.app` from source using the instructions below.
 
-The local build is ad-hoc signed, **not Developer ID signed or notarized**. See
+The initial build is ad-hoc signed, **not Developer ID signed or notarized**.
+Gatekeeper may block a downloaded copy. If your Mac refuses to open it, inspect
+the source and distribution notes before deciding whether to allow this build. See
 [distribution notes](docs/distribution.md) for signing, Keychain access after
 rebuilding, and the corresponding-source companion needed when sharing the core.
 
