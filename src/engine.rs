@@ -76,6 +76,9 @@ impl Mihomo {
         }
     }
     pub async fn start_probe(&mut self, state: &State) -> Result<()> {
+        if self.running() {
+            bail!("The proxy engine is already running.");
+        }
         let result = self.launch(state, true).await;
         if result.is_err() {
             self.stop().await?;
@@ -175,8 +178,12 @@ impl Mihomo {
                 server.proxy.uuid.clone(),
                 server.proxy.server.clone(),
                 server.proxy.name.clone(),
+                server.id.clone(),
             ]);
+            collect_sensitive(&serde_json::to_value(&server.proxy)?, &mut sensitive);
         }
+        sensitive.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        sensitive.dedup();
         macro_rules! capture {
             ($pipe:expr) => {{
                 let pipe = $pipe;
@@ -396,5 +403,39 @@ pub async fn connectivity(port: u16, exit_ip: bool) -> Result<String> {
             );
         }
         Ok("HTTPS verified through the selected proxy".into())
+    }
+}
+
+fn collect_sensitive(value: &serde_json::Value, values: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) if !s.is_empty() => values.push(s.clone()),
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                collect_sensitive(value, values);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for value in items {
+                collect_sensitive(value, values);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn diagnostic_redaction_includes_passwords_and_nested_transport_credentials() {
+        let data = serde_json::json!({"password":"private-password","obfs-password":"private-obfs","reality-opts":{"public-key":"private-key","short-id":"private-id"},"ws-opts":{"path":"/private-path","headers":{"Authorization":"private-token"}}});
+        let mut sensitive = Vec::new();
+        super::collect_sensitive(&data, &mut sensitive);
+        let mut output =
+            "private-password private-obfs private-key private-id /private-path private-token"
+                .to_string();
+        for value in sensitive {
+            output = output.replace(&value, "[redacted]");
+        }
+        assert!(!output.contains("private"));
     }
 }

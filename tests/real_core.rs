@@ -4,6 +4,7 @@ use nokiri::{
     model::State,
     subscription,
 };
+use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -33,6 +34,19 @@ async fn ready(port: u16) {
 async fn vless_fixture(binary: &Path, dir: &Path, port: u16, transport: &str) -> Child {
     let listener = serde_json::json!({"name":"fixture","type":"vless","port":port,"listen":"127.0.0.1","allow-insecure":true,"users":[{"username":"fixture","uuid":"00000000-0000-4000-8000-000000000001"}]});
     let mut configuration = serde_json::json!({"listeners":[listener],"rules":["MATCH,DIRECT"],"log-level":"silent","geo-auto-update":false});
+    match transport {
+        "vmess" => configuration["listeners"][0]["type"] = "vmess".into(),
+        "ss" => {
+            configuration["listeners"][0] = serde_json::json!({"name":"fixture","type":"shadowsocks","port":port,"listen":"127.0.0.1","cipher":"aes-128-gcm","password":"fixture-secret"})
+        }
+        "trojan" => {
+            configuration["listeners"][0] = serde_json::json!({"name":"fixture","type":"trojan","port":port,"listen":"127.0.0.1","users":[{"username":"fixture","password":"fixture-secret"}],"certificate":dir.join("cert.pem"),"private-key":dir.join("key.pem")})
+        }
+        _ => {}
+    }
+    if transport == "hysteria2" {
+        configuration["listeners"][0] = serde_json::json!({"name":"fixture","type":"hysteria2","port":port,"listen":"127.0.0.1","users":{"fixture":"fixture-secret"},"obfs":"salamander","obfs-password":"fixture-obfs","certificate":dir.join("cert.pem"),"private-key":dir.join("key.pem")});
+    }
     if transport == "ws" {
         configuration["listeners"][0]["ws-path"] = "/tunnel".into();
     }
@@ -55,7 +69,9 @@ async fn vless_fixture(binary: &Path, dir: &Path, port: u16, transport: &str) ->
     if let Some(status) = child.try_wait().unwrap() {
         panic!("VLESS fixture exited: {status}");
     }
-    ready(port).await;
+    if transport != "hysteria2" {
+        ready(port).await;
+    }
     child
 }
 fn catalog(server_port: u16, transport: &str) -> State {
@@ -71,7 +87,7 @@ fn catalog(server_port: u16, transport: &str) -> State {
 
 #[tokio::test]
 #[ignore = "Requires the verified official macOS ARM64 core, openssl and Python 3"]
-async fn real_vless_https_failure_isolation_restart_and_unexpected_termination() {
+async fn real_protocol_https_failure_isolation_restart_and_unexpected_termination() {
     let binary = engine::core_path().unwrap();
     engine::verify_binary(&binary, &engine::manifest().binary_sha256)
         .await
@@ -135,18 +151,60 @@ server.socket=ctx.wrap_socket(server.socket,server_side=True);server.serve_forev
     ready(target_port).await;
     let root = reqwest::Certificate::from_pem(&std::fs::read(&cert).unwrap()).unwrap();
     let target_url = format!("https://127.0.0.1:{target_port}/204");
-    for transport in ["tcp", "ws", "grpc"] {
+    for transport in ["tcp", "ws", "grpc", "hysteria2", "vmess", "trojan", "ss"] {
         let server_port = port();
         let backup_port = port();
         let mut upstream = vless_fixture(&binary, dir.path(), server_port, transport).await;
         let mut backup = vless_fixture(&binary, dir.path(), backup_port, transport).await;
-        let mut state = catalog(server_port, transport);
-        let extra = catalog(backup_port, transport).servers.remove(0).proxy;
+        let make_catalog = |port| {
+            if !["hysteria2", "vmess", "trojan", "ss"].contains(&transport) {
+                return catalog(port, transport);
+            }
+            let der = std::process::Command::new("openssl")
+                .args(["x509", "-in"])
+                .arg(&cert)
+                .args(["-outform", "DER"])
+                .output()
+                .unwrap();
+            assert!(der.status.success());
+            let pin = hex::encode(Sha256::digest(der.stdout));
+            let url = match transport {
+                "vmess" => {
+                    use base64::Engine;
+                    format!("vmess://{}",base64::engine::general_purpose::STANDARD.encode(serde_json::json!({"v":"2","ps":"fixture","add":"127.0.0.1","port":port,"id":"00000000-0000-4000-8000-000000000001","net":"tcp","scy":"auto"}).to_string()))
+                }
+                "trojan" => format!("trojan://fixture-secret@127.0.0.1:{port}?sni=localhost"),
+                "ss" => format!("ss://aes-128-gcm:fixture-secret@127.0.0.1:{port}"),
+                _ => format!(
+                    "hy2://fixture-secret@127.0.0.1:{port}?sni=localhost&obfs=salamander&obfs-password=fixture-obfs&pinSHA256={pin}"
+                ),
+            };
+            let mut state = State::default();
+            state.replace_source("fixture", subscription::parse(&url).unwrap());
+            if transport == "trojan" {
+                state.servers[0]
+                    .proxy
+                    .options
+                    .insert("fingerprint".into(), pin.into());
+            }
+            state.selected = Some(state.servers[0].id.clone());
+            state.settings.port = self::port();
+            state
+        };
+        let mut state = make_catalog(server_port);
+        let extra = make_catalog(backup_port).servers.remove(0).proxy;
         state.replace_source("backup", vec![extra]);
         let mut core = Mihomo::new(binary.clone(), engine::manifest().binary_sha256);
         core.start(&state)
             .await
             .unwrap_or_else(|e| panic!("{transport}: {e:?}\n{}", core.diagnostics()));
+        let owned_pid = core.pid();
+        assert!(core.start_probe(&state).await.is_err());
+        assert_eq!(
+            core.pid(),
+            owned_pid,
+            "A duplicate start must not stop the owned running core"
+        );
         let client = || {
             reqwest::Client::builder()
                 .no_proxy()
@@ -211,6 +269,29 @@ server.socket=ctx.wrap_socket(server.socket,server_side=True);server.serve_forev
             client().get(&target_url).send().await.unwrap().status(),
             204
         );
+        if transport == "hysteria2" {
+            for key in ["fingerprint", "password"] {
+                core.stop().await.unwrap();
+                let mut invalid = state.clone();
+                let proxy = &mut invalid.servers[0].proxy;
+                proxy.options.insert(
+                    key.into(),
+                    if key == "fingerprint" {
+                        "00".repeat(32)
+                    } else {
+                        "wrong-password".into()
+                    }
+                    .into(),
+                );
+                core.start(&invalid).await.unwrap();
+                assert!(
+                    client().get(&target_url).send().await.is_err(),
+                    "Hysteria 2 must reject invalid {key}"
+                );
+            }
+            core.stop().await.unwrap();
+            core.start(&state).await.unwrap();
+        }
         upstream.kill().await.unwrap();
         upstream.wait().await.unwrap();
         assert!(
