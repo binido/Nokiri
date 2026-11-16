@@ -20,7 +20,8 @@ def package():
         shutil.rmtree(bundle.parent)
     for folder in ("MacOS", "Resources", "Resources/Licenses"):
         (bundle / folder).mkdir(parents=True, exist_ok=True)
-    shutil.copy2(Path(json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version=1"], cwd=ROOT))["target_directory"]) / "release/nokiri", bundle / "MacOS/Nokiri")
+    metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version=1"], cwd=ROOT))
+    shutil.copy2(Path(metadata["target_directory"]) / "release/nokiri", bundle / "MacOS/Nokiri")
     shutil.copy2(core, bundle / "Resources/mihomo")
     shutil.copy2(ROOT / "assets/core.json", bundle / "Resources/core.json")
     iconset = ROOT / "target/Nokiri.iconset"
@@ -30,7 +31,7 @@ def package():
             filename = f"icon_{size}x{size}{'@2x' if scale == 2 else ''}.png"
             subprocess.run(["sips", "-z", str(size * scale), str(size * scale), str(ROOT / "assets/icons/nokiri.png"), "--out", str(iconset / filename)], check=True, stdout=subprocess.DEVNULL)
     subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(bundle / "Resources/Nokiri.icns")], check=True)
-    info = dict(CFBundleName="Nokiri", CFBundleDisplayName="Nokiri", CFBundleExecutable="Nokiri", CFBundleIdentifier="io.github.binido.nokiri", CFBundleIconFile="Nokiri", CFBundlePackageType="APPL", CFBundleShortVersionString="0.1.0", CFBundleVersion="1", LSMinimumSystemVersion="12.0", NSHighResolutionCapable=True, NSPrincipalClass="NSApplication", NSSupportsAutomaticGraphicsSwitching=True, NSHumanReadableCopyright="Copyright 2026 Binido. Nokiri MIT; bundled Mihomo GPL-3.0.")
+    info = dict(CFBundleName="Nokiri", CFBundleDisplayName="Nokiri", CFBundleExecutable="Nokiri", CFBundleIdentifier="io.github.binido.nokiri", CFBundleIconFile="Nokiri", CFBundlePackageType="APPL", CFBundleShortVersionString=metadata["packages"][0]["version"], CFBundleVersion=metadata["packages"][0]["version"], LSMinimumSystemVersion="12.0", NSHighResolutionCapable=True, NSPrincipalClass="NSApplication", NSSupportsAutomaticGraphicsSwitching=True, NSHumanReadableCopyright="Copyright 2026 Binido. Nokiri MIT; bundled Mihomo GPL-3.0.")
     (bundle / "Info.plist").write_bytes(plistlib.dumps(info))
     for source, name in [(ROOT / "LICENSE", "Nokiri-MIT.txt"), (ROOT / "assets/MIHOMO-LICENSE", "Mihomo-GPL-3.0.txt"), (ROOT / "assets/fonts/OFL.txt", "Roboto-OFL.txt"), (ROOT / "assets/fonts/MaterialSymbols-LICENSE", "MaterialSymbols-Apache-2.0.txt"), (ROOT / "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md")]:
         shutil.copy2(source, bundle / "Resources/Licenses" / name)
