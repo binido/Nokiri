@@ -408,6 +408,14 @@ impl Nokiri {
                     .small()
                     .color(self.muted()),
             );
+            ui.label(
+                RichText::new("Other VPNs can affect routes and DNS. Running does not mean HTTPS is verified.")
+                    .small()
+                    .color(self.muted()),
+            );
+            for warning in &self.snapshot.network_warnings {
+                ui.colored_label(self.error_color(), warning);
+            }
         });
         ui.add_space(8.0);
         self.card().show(ui, |ui| {
@@ -1071,6 +1079,10 @@ mod layout_tests {
         proxy.name = "LongServerName".repeat(18);
         app.snapshot.state.replace_source("fixture", vec![proxy]);
         app.snapshot.state.selected = Some(app.snapshot.state.servers[0].id.clone());
+        app.snapshot.network_warnings = vec![
+            "VPN/tunnel routes are active. Connections to your server or DNS may use another VPN. Nokiri does not bypass VPN routing.".into(),
+            "System proxy or PAC is enabled. Other apps may use it instead of Nokiri; configure them for Nokiri's local port.".into(),
+        ];
         app.snapshot
             .state
             .subscriptions
@@ -1102,7 +1114,11 @@ mod layout_tests {
                     for shape in output.shapes {
                         if let egui::Shape::Text(text) = &shape.shape
                             && (text.galley.job.text.contains("LongServerName")
-                                || text.galley.job.text.contains("LongSubscriptionName"))
+                                || text.galley.job.text.contains("LongSubscriptionName")
+                                || app
+                                    .snapshot
+                                    .network_warnings
+                                    .contains(&text.galley.job.text))
                         {
                             assert!(
                                 text.pos.x + text.galley.size().x <= shape.clip_rect.right() + 1.0,

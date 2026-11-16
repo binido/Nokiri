@@ -30,6 +30,7 @@ pub struct Snapshot {
     pub checks: BTreeMap<String, Check>,
     pub core_version: String,
     pub diagnostics: String,
+    pub network_warnings: Vec<String>,
     pub pid: Option<u32>,
     pub locked: bool,
 }
@@ -167,12 +168,24 @@ impl Worker {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
+        let mut network_tick = tokio::time::interval(Duration::from_secs(15));
         'actions: loop {
             if *shutdown.borrow() {
                 break;
             }
             tokio::select! {
                 _ = shutdown.changed() => break,
+                _ = network_tick.tick() => {
+                    let warnings = tokio::select! {
+                        warnings = crate::platform::network_warnings() => warnings,
+                        _ = shutdown.changed() => break 'actions,
+                    };
+                    if warnings != self.snapshot.network_warnings {
+                        self.snapshot.network_warnings = warnings;
+                        self.snapshot.exit_ip = None;
+                        self.publish();
+                    }
+                }
                 action = actions.recv() => {
                     let Some(action) = action else { break; };
                     if matches!(action, Action::Shutdown) { break; }

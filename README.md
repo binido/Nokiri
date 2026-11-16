@@ -73,6 +73,30 @@ Nokiri does not change macOS network settings. Your client's own bypass settings
 such as `NO_PROXY`, remain its responsibility. Settings allow another local port,
 a theme, and starting the saved selection when Nokiri opens.
 
+### Other VPNs and proxies
+
+Nokiri's controller, subscription downloads and connection checks ignore automatic
+system/environment HTTP and SOCKS proxies. Connection checks explicitly use
+Nokiri's local port, even with `NO_PROXY=*`; an unavailable proxy produces an error
+without direct fallback. A local port already occupied by another app prevents
+startup and produces an error.
+
+VPNs such as Pritunl operate below HTTP/SOCKS proxy settings. Their routes, DNS,
+firewalls and MTU can still affect the connection to your selected server. With
+full tunneling, the path can be device -> VPN -> selected proxy -> destination.
+With split tunneling, only matching networks use the VPN.
+
+On macOS the Dashboard checks enabled system HTTP/SOCKS proxies, PAC/autodiscovery
+and IPv4 routes on tunnel interfaces every 15 seconds, including while stopped.
+Warnings identify possible interference, not a confirmed failure or the app that
+created a route. These checks read local settings only, make no external requests
+and do not save routing tables or proxy addresses. Inspection failures are shown
+as warnings too. The checks do not inspect DNS, IPv6 routing, firewall rules or
+the actual path to each server; no warning is not a guarantee of isolation.
+Nokiri does not disable other VPNs, rewrite routes, or force traffic around them.
+**Proxy running** means the local core is running; use **Test HTTPS** to check
+end-to-end connectivity. Automatic conflict inspection is macOS-only.
+
 ### Background operation on macOS
 
 Closing the window keeps Nokiri and its proxy running in the menu bar and removes
