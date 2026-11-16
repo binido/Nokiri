@@ -20,7 +20,7 @@ download or update an executable at runtime.
 Nokiri is **ad-hoc signed only**, with no Developer ID or notarization. Finder
 launch works locally. A downloaded copy can be blocked by Gatekeeper. Distribution
 as a conventional macOS download requires a maintainer's signing and notarization
-workflow. The initial v0.1.0 release is an explicitly ad-hoc signed early build;
+workflow. The initial release is an explicitly ad-hoc signed early build;
 it does not offer that installation experience. Nokiri does not modify Gatekeeper
 settings. Keychain can request authorization
 again after an ad-hoc rebuild changes the application identity.

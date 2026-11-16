@@ -35,6 +35,12 @@ jobs:
         run: |
           test "$(lipo -archs dist/Nokiri.app/Contents/MacOS/Nokiri)" = arm64
           test "$(lipo -archs dist/Nokiri.app/Contents/Resources/mihomo)" = arm64
+      - name: Install Go for source companion
+        if: runner.os == 'macOS'
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
       - name: Prepare corresponding Mihomo source
         if: runner.os == 'macOS'
         run: python3 scripts/prepare_core_source.py
