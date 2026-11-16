@@ -211,6 +211,100 @@ async fn explicit_proxy_never_uses_direct_when_proxy_is_unreachable() {
         .await;
     assert!(response.is_err());
 }
+
+#[tokio::test]
+async fn network_clients_ignore_foreign_proxy_environment() {
+    if std::env::var_os("NOKIRI_PROXY_ENV_TEST").is_none() {
+        for exclusions in ["", "*"] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args([
+                "--exact",
+                "network_clients_ignore_foreign_proxy_environment",
+            ]);
+            command.env("NOKIRI_PROXY_ENV_TEST", "1");
+            for key in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ] {
+                command.env(key, "http://127.0.0.1:0");
+            }
+            command
+                .env("NO_PROXY", exclusions)
+                .env("no_proxy", exclusions);
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    }
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let controller = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = controller.local_addr().unwrap().port();
+    let serve = tokio::spawn(async move {
+        let (mut stream, _) = controller.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let size = stream.read(&mut request).await.unwrap();
+        let request = String::from_utf8_lossy(&request[..size]);
+        assert!(request.starts_with("GET /version HTTP/1.1"));
+        assert!(request.contains("Bearer controller-secret"));
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+    });
+    let response = engine::Controller::new(port, "controller-secret".into())
+        .unwrap()
+        .get("/version")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 204);
+    serve.await.unwrap();
+
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = proxy.local_addr().unwrap().port();
+    let serve = tokio::spawn(async move {
+        let (mut stream, _) = proxy.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let size = stream.read(&mut request).await.unwrap();
+        assert!(
+            String::from_utf8_lossy(&request[..size])
+                .starts_with("GET http://example.invalid/check HTTP/1.1")
+        );
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+    });
+    let response = engine::proxy_client(port, Duration::from_secs(2))
+        .unwrap()
+        .get("http://example.invalid/check")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 204);
+    serve.await.unwrap();
+
+    let subscription = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = subscription.local_addr().unwrap().port();
+    let url = format!("https://127.0.0.1:{port}/private-token");
+    let (request, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(subscription::fetch(&url), async {
+            let (_stream, _) = subscription.accept().await.unwrap();
+        })
+    })
+    .await
+    .unwrap();
+    assert!(request.is_err());
+}
 #[tokio::test]
 async fn proxied_connectivity_has_a_real_timeout() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

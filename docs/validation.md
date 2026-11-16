@@ -1,5 +1,30 @@
 # Validation record
 
+## VPN and proxy conflict follow-up, 2026-11-16
+
+- `cargo test --locked`: 33 passed, 3 real-core checks intentionally ignored.
+- `cargo test --locked --test real_core --test protocols -- --ignored`: 3 passed.
+- Formatting, Clippy with warnings denied, and whitespace checks passed.
+- `python3 scripts/package_macos.py`: built `dist/Nokiri.app`, verified the pinned
+  core, collected 236 dependency notices and verified the ad-hoc signature.
+- Tests cover enabled/disabled system proxy and PAC flags, split/full IPv4 tunnel
+  routes, and ordinary LAN routes. The existing layout test includes both warnings
+  at both window sizes in both themes.
+- An isolated child-process test sets foreign proxy environment variables and
+  both empty and wildcard bypass lists. It verifies controller authorization goes
+  to the local controller, explicit checks reach the chosen local proxy, and
+  subscription HTTPS attempts reach the intended local TLS endpoint.
+- A temporary read-only probe invoked the new network inspection on this Mac
+  with Pritunl active. It reported tunnel routes and no system proxy warning,
+  consistent with the independently inspected system proxy flags and route table.
+  The probe source was removed afterward.
+
+The inspection detects possible conflicts, not actual per-server routing or DNS
+interference. IPv6, DNS, MTU and firewall diagnosis are outside this check. No VPN
+was disconnected and no routes, system proxy settings or user catalog were changed.
+The new GUI was checked through the layout tests, not direct desktop clicks.
+The running installed application was not replaced. No new release was published.
+
 Executed on 2026-11-15 on an Apple Silicon development Mac (Darwin 27.2),
 with Rust 1.99.1 and pinned official Mihomo v1.19.34.
 
