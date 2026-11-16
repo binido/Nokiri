@@ -71,8 +71,30 @@ curl --proxy socks5h://127.0.0.1:7890 https://example.com
 
 Nokiri does not change macOS network settings. Your client's own bypass settings,
 such as `NO_PROXY`, remain its responsibility. Settings allow another local port,
-a theme, and starting the saved selection when Nokiri opens. Automatic launch at
-macOS login is outside this version's scope.
+a theme, and starting the saved selection when Nokiri opens.
+
+### Background operation on macOS
+
+Closing the window keeps Nokiri and its proxy running in the menu bar and removes
+the Dock icon. The menu shows connection state and any error, and provides
+**Open Nokiri**, **Connect / Disconnect**, and **Quit Nokiri**. Opening the window
+restores its Dock icon. **Quit Nokiri** and **Cmd+Q** stop the proxy and exit.
+Connection errors stay in the menu bar without opening the window or reconnecting
+automatically.
+
+In Settings, **Launch Nokiri at macOS login** independently enables a hidden launch
+at your next login. The checkbox takes effect immediately; the existing
+**Start the selected proxy when Nokiri opens** setting controls whether that
+launch also connects. Both are off by default. Install Nokiri.app in Applications
+before enabling launch at login, and enable it again if you move the app.
+macOS may require allowing Nokiri in Login Items / background activity settings.
+
+Launch registration is a per-user file at
+`~/Library/LaunchAgents/io.github.binido.nokiri.plist`; turning the checkbox off
+removes it. It contains only the application path and `--background`, with no
+server credentials. Nokiri runs after user login, without administrator access or
+a separate system service. Removing the app alone does not remove this file;
+disable launch at login before uninstalling.
 
 ## Supported imports
 

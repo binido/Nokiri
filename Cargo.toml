@@ -1,6 +1,6 @@
 [package]
 name = "nokiri"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -33,6 +33,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSWindow", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSResponder", "NSMenu", "NSMenuItem", "NSImage", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSArray", "NSNotification", "NSGeometry", "NSAppleEventManager", "NSAppleEventDescriptor"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }

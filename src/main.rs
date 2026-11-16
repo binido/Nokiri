@@ -1,7 +1,11 @@
+#[cfg(target_os = "macos")]
+mod desktop;
 mod ui;
 use nokiri::platform::{self, SystemSecrets, Vault};
 
 fn main() -> eframe::Result<()> {
+    let background =
+        cfg!(target_os = "macos") && std::env::args_os().any(|arg| arg == "--background");
     tracing_subscriber::fmt()
         .with_env_filter("nokiri=info")
         .with_target(false)
@@ -32,7 +36,8 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(ui::Nokiri::new(
                 cc,
                 Vault::new(dir.join("catalog.enc"), Box::new(SystemSecrets)),
-            )))
+                background,
+            )?))
         }),
     )
 }
