@@ -48,7 +48,7 @@ rebuilding, and the corresponding-source companion needed when sharing the core.
 ## Usage
 
 1. Open **Subscriptions** and add a name and an HTTPS subscription URL. For a
-   single server, choose **Import VLESS / YAML** and paste its URL or YAML.
+   single server, choose **Import proxy / YAML** and paste its URL or YAML.
 2. Open **Servers**, select a server explicitly, and optionally run **Test**.
 3. On **Dashboard**, click **Start proxy**. The default endpoint is
    `http://127.0.0.1:7890`; the same port accepts SOCKS5.
@@ -76,20 +76,32 @@ macOS login is outside this version's scope.
 
 | Input | Scope |
 | --- | --- |
-| `vless://` URLs | TCP, WebSocket and gRPC; plain transport, TLS, REALITY; TCP Vision |
-| Base64 subscription | Standard / URL-safe Base64, padded or unpadded, containing VLESS URLs |
-| Clash / Mihomo YAML | An inline `proxies` list using the supported VLESS fields |
+| `vless://` | TCP, WebSocket, HTTPUpgrade, gRPC, HTTP, H2, XHTTP; TLS, REALITY and TCP Vision |
+| `hysteria2://`, `hy2://` | Password authentication, SNI, Salamander/Gecko, port hopping, certificate pin |
+| `hysteria://` | Legacy Hysteria over UDP, auth, bandwidth, obfuscation and port hopping |
+| `vmess://` | Common Base64 JSON profiles, TCP, WebSocket, gRPC, HTTP and H2 |
+| `trojan://` | TLS over TCP, WebSocket or gRPC |
+| `ss://` | Shadowsocks SIP002 and legacy Base64, without executable plugins |
+| `http://`, `https://`, `socks5://` | HTTP CONNECT / SOCKS5 upstreams with optional authentication |
+| Base64 subscription | Mixed supported URLs, standard / URL-safe, padded or unpadded |
+| Clash / Mihomo YAML | An inline `proxies` list with allowlisted protocol fields |
 
-The parser targets common 3x-ui parameters: SNI, client fingerprint, ALPN,
-WebSocket path and Host, gRPC service name, REALITY public key and short ID.
-It is not a claim of compatibility with every 3x-ui version or export.
+VLESS supports SNI, client fingerprint, ALPN, WebSocket early data, gRPC service
+name, REALITY public key / short ID, and core-supported VLESS encryption strings.
+XHTTP accepts path, host, mode and a limited set of inline options; external
+`downloadSettings`, multiplexing and gRPC multi mode remain unsupported. Unknown
+fields fail with an explanation instead of being silently dropped.
 
-Other proxy protocols, XHTTP, HTTP camouflage, WebSocket early data, gRPC multi
-mode, multiplexing, arbitrary headers, and disabled certificate verification are
-rejected with explanations. Unknown per-proxy fields are rejected. Imports are
-all-or-nothing so an unsupported entry cannot silently alter a working selection.
-Subscription-provided rules, groups, providers, scripts and listener settings are
-never activated. Provider-only YAML without inline proxies is unsupported.
+Certificate verification stays enabled by default. A profile requesting
+`insecure=1`, `allowInsecure=1` or `skip-cert-verify: true` requires explicit
+consent in the import dialog unless a valid certificate SHA-256 pin is present.
+Unverified profiles remain visibly marked. Subscription updates retain the
+source's import consent. Legacy Hysteria URLs without bandwidth values default
+to 100 Mbps upload/download; YAML must specify them.
+
+Imports are all-or-nothing. Subscription-provided rules, groups, providers,
+scripts and listener settings are never activated. Provider-only YAML without
+inline proxies and external executable plugins are unsupported.
 
 HTTPS subscriptions have a 20-second timeout and 4 MiB / 5000-server limits.
 Redirects are refused to avoid disclosing subscription credentials. Availability

@@ -3,13 +3,14 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
 pub struct Proxy {
     pub name: String,
     #[serde(rename = "type")]
     pub kind: String,
     pub server: String,
     pub port: u16,
+    #[serde(default)]
     pub uuid: String,
     #[serde(default)]
     pub tls: bool,
@@ -33,6 +34,8 @@ pub struct Proxy {
     pub udp: bool,
     #[serde(default = "xudp")]
     pub packet_encoding: String,
+    #[serde(default, flatten)]
+    pub options: BTreeMap<String, serde_json::Value>,
 }
 fn tcp() -> String {
     "tcp".into()
@@ -59,6 +62,10 @@ pub struct WebSocket {
     pub max_early_data: u32,
     #[serde(default)]
     pub early_data_header_name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub v2ray_http_upgrade: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub v2ray_http_upgrade_fast_open: bool,
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -67,6 +74,81 @@ pub struct Grpc {
 }
 
 impl Proxy {
+    pub fn new(kind: &str, server: String, port: u16, name: String) -> Self {
+        serde_json::from_value(
+            serde_json::json!({"type":kind,"server":server,"port":port,"name":name}),
+        )
+        .unwrap()
+    }
+    pub fn unverified_tls(&self) -> bool {
+        self.options
+            .get("skip-cert-verify")
+            .and_then(|v| v.as_bool())
+            == Some(true)
+            && self
+                .options
+                .get("fingerprint")
+                .and_then(|v| v.as_str())
+                .is_none_or(str::is_empty)
+    }
+    pub fn engine_value(&self) -> serde_json::Value {
+        let mut value = serde_json::to_value(self).unwrap();
+        let fields = value.as_object_mut().unwrap();
+        if !["vless", "vmess"].contains(&self.kind.as_str()) {
+            fields.remove("uuid");
+            fields.remove("packet-encoding");
+        }
+        if self.kind != "vless" {
+            fields.remove("flow");
+            fields.remove("reality-opts");
+        }
+        if !["vless", "vmess", "trojan"].contains(&self.kind.as_str()) {
+            for key in ["network", "ws-opts", "grpc-opts", "client-fingerprint"] {
+                fields.remove(key);
+            }
+        }
+        if !["vless", "vmess", "trojan", "http", "socks5"].contains(&self.kind.as_str()) {
+            fields.remove("tls");
+        }
+        if self.kind != "vless" {
+            fields.remove("packet-encoding");
+        }
+        if !["vless", "vmess"].contains(&self.kind.as_str()) {
+            fields.remove("servername");
+            if !self.servername.is_empty() {
+                fields.insert("sni".into(), self.servername.clone().into());
+            }
+        }
+        value
+    }
+    pub fn description(&self) -> String {
+        let protocol = match self.kind.as_str() {
+            "hysteria2" => "Hysteria 2",
+            "hysteria" => "Hysteria",
+            "ss" => "Shadowsocks",
+            "vmess" => "VMess",
+            "vless" => "VLESS",
+            "trojan" => "Trojan",
+            "http" => "HTTP",
+            "socks5" => "SOCKS5",
+            _ => &self.kind,
+        };
+        let transport = if ["vless", "vmess", "trojan"].contains(&self.kind.as_str()) {
+            format!(" {}", self.network.to_uppercase())
+        } else {
+            String::new()
+        };
+        format!(
+            "{protocol}{transport}{}",
+            if self.reality_opts.is_some() {
+                " + REALITY"
+            } else if self.tls {
+                " + TLS"
+            } else {
+                ""
+            }
+        )
+    }
     pub fn identity(&self, source: &str) -> String {
         let mut canonical = self.clone();
         canonical.name.clear();
@@ -90,6 +172,8 @@ pub struct Subscription {
     pub url: String,
     pub updated: Option<u64>,
     pub status: String,
+    #[serde(default)]
+    pub allow_unverified_tls: bool,
 }
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(default)]

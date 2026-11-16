@@ -34,8 +34,10 @@ pub fn parse(input: &str) -> Result<Vec<Proxy>> {
             return Err(bad("Expected 1 to 5000 proxy entries."));
         }
         return items.iter().enumerate().map(|(i, v)| {
-                let proxy: Proxy = serde_yaml::from_value(v.clone()).map_err(|_| bad(&format!("Proxy {} has unsupported fields or protocol. Only VLESS TCP, WebSocket and gRPC are supported; insecure TLS and routing overrides are rejected.", i + 1)))?;
-                validate(&proxy)?;
+                let proxy: Proxy = serde_yaml::from_value(v.clone()).map_err(|_| bad(&format!("Proxy {} has unsupported fields or protocol. Check the supported protocol fields; routing overrides and executable settings are rejected.", i + 1)))?;
+                let mut proxy=proxy;
+                normalize(&mut proxy)?;
+    validate(&proxy)?;
                 Ok(proxy)
             }).collect();
     }
@@ -48,7 +50,7 @@ pub fn parse(input: &str) -> Result<Vec<Proxy>> {
         }
     }
     Err(bad(
-        "Expected Clash YAML with a proxies list, Base64 proxy URLs, or a VLESS URL.",
+        "Expected Clash YAML with a proxies list, Base64 proxy URLs, or supported proxy URLs.",
     ))
 }
 fn parse_lines(input: &str) -> Result<Vec<Proxy>> {
@@ -58,21 +60,21 @@ fn parse_lines(input: &str) -> Result<Vec<Proxy>> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect();
     if lines.is_empty() || lines.len() > 5000 {
-        return Err(bad("Expected 1 to 5000 VLESS URLs."));
+        return Err(bad("Expected 1 to 5000 proxy URLs."));
     }
     lines
         .into_iter()
         .enumerate()
-        .map(|(i, l)| parse_vless(l).map_err(|e| bad(&format!("Entry {}: {}", i + 1, e.0))))
+        .map(|(i, l)| {
+            crate::share::parse_url(l).map_err(|e| bad(&format!("Entry {}: {}", i + 1, e.0)))
+        })
         .collect()
 }
 
 pub fn parse_vless(input: &str) -> Result<Proxy> {
     let u = Url::parse(input).map_err(|_| bad("Invalid VLESS URL."))?;
     if u.scheme() != "vless" {
-        return Err(bad(
-            "Unsupported protocol. This release imports VLESS only.",
-        ));
+        return Err(bad("Expected a VLESS URL."));
     }
     if u.password().is_some() {
         return Err(bad("VLESS URLs must contain a UUID without a password."));
@@ -103,6 +105,10 @@ pub fn parse_vless(input: &str) -> Result<Proxy> {
         "headerType",
         "allowInsecure",
         "insecure",
+        "ed",
+        "eh",
+        "packetEncoding",
+        "extra",
     ];
     if q.keys().any(|k| !allowed.contains(&k.as_str())) {
         return Err(bad(
@@ -110,34 +116,30 @@ pub fn parse_vless(input: &str) -> Result<Proxy> {
         ));
     }
     let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
-    if !["", "none"].contains(&get("encryption")) {
-        return Err(bad("Only VLESS encryption=none is supported."));
-    }
-    if !["", "none"].contains(&get("headerType"))
-        || !get("authority").is_empty()
-        || !["", "gun"].contains(&get("mode"))
-    {
+
+    if !["", "none", "http"].contains(&get("headerType")) || !get("authority").is_empty() {
         return Err(bad(
-            "HTTP camouflage, gRPC authority and multi mode are not supported.",
-        ));
-    }
-    if ["allowInsecure", "insecure"]
-        .iter()
-        .any(|k| !["", "0", "false"].contains(&get(k)))
-    {
-        return Err(bad(
-            "Disabling TLS certificate verification is not supported.",
+            "Unsupported HTTP camouflage or gRPC authority setting.",
         ));
     }
     let security = get("security");
     if !["", "none", "tls", "reality"].contains(&security) {
         return Err(bad("Unsupported VLESS security mode."));
     }
-    let network = if get("type").is_empty() {
+    let raw_network = if get("type").is_empty() {
         "tcp"
     } else {
         get("type")
     };
+    let network = match raw_network {
+        "httpupgrade" => "ws",
+        "splithttp" => "xhttp",
+        "tcp" if get("headerType") == "http" => "http",
+        other => other,
+    };
+    if network == "grpc" && !["", "gun"].contains(&get("mode")) {
+        return Err(bad("gRPC multi mode is not supported by Mihomo."));
+    }
     let host = u
         .host_str()
         .ok_or_else(|| bad("Missing server host."))?
@@ -151,7 +153,14 @@ pub fn parse_vless(input: &str) -> Result<Proxy> {
     if !get("host").is_empty() {
         headers.insert("Host".into(), get("host").into());
     }
-    let proxy = Proxy {
+    let early_data = if get("ed").is_empty() {
+        0
+    } else {
+        get("ed")
+            .parse::<u32>()
+            .map_err(|_| bad("Invalid WebSocket early data size."))?
+    };
+    let mut proxy = Proxy {
         name,
         kind: "vless".into(),
         server: host,
@@ -167,7 +176,7 @@ pub fn parse_vless(input: &str) -> Result<Proxy> {
             get("sni")
         }
         .into(),
-        flow: get("flow").into(),
+        flow: get("flow").trim_end_matches("-udp443").into(),
         network: network.into(),
         client_fingerprint: if security == "reality" && get("fp").is_empty() {
             "chrome"
@@ -192,25 +201,69 @@ pub fn parse_vless(input: &str) -> Result<Proxy> {
             }
             .into(),
             headers,
-            max_early_data: 0,
-            early_data_header_name: String::new(),
+            max_early_data: early_data,
+            early_data_header_name: get("eh").into(),
+            v2ray_http_upgrade: raw_network == "httpupgrade",
+            v2ray_http_upgrade_fast_open: false,
         }),
         grpc_opts: (network == "grpc").then(|| Grpc {
             grpc_service_name: get("serviceName").into(),
         }),
         udp: false,
-        packet_encoding: "xudp".into(),
+        packet_encoding: if get("packetEncoding").is_empty() {
+            "xudp"
+        } else {
+            get("packetEncoding")
+        }
+        .into(),
+        options: BTreeMap::new(),
     };
+    if crate::share::flag(get("allowInsecure"))? || crate::share::flag(get("insecure"))? {
+        proxy.options.insert("skip-cert-verify".into(), true.into());
+    }
+    if !["", "none"].contains(&get("encryption")) {
+        proxy
+            .options
+            .insert("encryption".into(), get("encryption").into());
+    }
+    match network {
+        "xhttp" => {
+            let mut opts = serde_json::json!({"path":if get("path").is_empty(){"/"}else{get("path")},"host":get("host")});
+            if !get("mode").is_empty() {
+                opts["mode"] = get("mode").into();
+            }
+            if !get("extra").is_empty() {
+                let extra: serde_json::Value = serde_json::from_str(get("extra"))
+                    .map_err(|_| bad("Invalid XHTTP extra JSON."))?;
+                for (key, value) in extra
+                    .as_object()
+                    .ok_or_else(|| bad("XHTTP extra must be an object."))?
+                {
+                    let target = match key.as_str() {
+                        "noGRPCHeader" => "no-grpc-header",
+                        "xPaddingBytes" => "x-padding-bytes",
+                        "headers" => "headers",
+                        _ => return Err(bad("Unsupported XHTTP extra option.")),
+                    };
+                    opts[target] = value.clone();
+                }
+            }
+            proxy.options.insert("xhttp-opts".into(), opts);
+        }
+        "h2" => {
+            proxy.options.insert("h2-opts".into(),serde_json::json!({"host":[get("host")],"path":if get("path").is_empty(){"/"}else{get("path")}}));
+        }
+        "http" => {
+            proxy.options.insert("http-opts".into(),serde_json::json!({"method":"GET","path":[if get("path").is_empty(){"/"}else{get("path")}],"headers":{"Host":[get("host")]}}));
+        }
+        _ => {}
+    }
     validate(&proxy)?;
     Ok(proxy)
 }
 
 pub fn validate(p: &Proxy) -> Result<()> {
-    if p.kind != "vless" {
-        return Err(bad(
-            "Unsupported proxy protocol. Only VLESS is supported in this release.",
-        ));
-    }
+    crate::protocol::validate_options(p).map_err(bad)?;
     if p.name.trim().is_empty() || p.name.len() > 256 || p.name.chars().any(char::is_control) {
         return Err(bad("Server names must contain 1 to 256 printable bytes."));
     }
@@ -223,11 +276,22 @@ pub fn validate(p: &Proxy) -> Result<()> {
     {
         return Err(bad("Invalid server host or port."));
     }
-    uuid::Uuid::parse_str(&p.uuid).map_err(|_| bad("VLESS requires a valid UUID."))?;
-    if !["tcp", "ws", "grpc"].contains(&p.network.as_str()) {
+    if ["vless", "vmess"].contains(&p.kind.as_str()) {
+        uuid::Uuid::parse_str(&p.uuid).map_err(|_| bad("This protocol requires a valid UUID."))?;
+    }
+    if !["tcp", "ws", "grpc", "http", "h2", "xhttp"].contains(&p.network.as_str()) {
         return Err(bad(
-            "Unsupported transport. Supported transports are TCP, WebSocket and gRPC.",
+            "Unsupported transport. Supported transports are TCP, WebSocket, HTTPUpgrade, gRPC, HTTP, H2 and XHTTP.",
         ));
+    }
+    if !p.flow.is_empty() && p.kind != "vless" {
+        return Err(bad("Flow is only supported for VLESS."));
+    }
+    if ["vmess", "trojan"].contains(&p.kind.as_str()) && p.network == "xhttp" {
+        return Err(bad("XHTTP is currently supported for VLESS only."));
+    }
+    if p.kind == "trojan" && !["tcp", "ws", "grpc"].contains(&p.network.as_str()) {
+        return Err(bad("Trojan supports TCP, WebSocket and gRPC."));
     }
     if !["", "xtls-rprx-vision"].contains(&p.flow.as_str())
         || !p.flow.is_empty() && (!p.tls || p.network != "tcp")
@@ -244,20 +308,21 @@ pub fn validate(p: &Proxy) -> Result<()> {
         ));
     }
     if let Some(ws) = &p.ws_opts {
-        if ws.max_early_data != 0
-            || !ws.early_data_header_name.is_empty()
-            || ws.path.contains('?') && ws.path.contains("ed=")
-        {
-            return Err(bad(
-                "WebSocket early data is not supported in this release.",
-            ));
+        if ws.max_early_data > 65536 {
+            return Err(bad("WebSocket early data cannot exceed 64 KiB."));
         }
-        if ws.headers.keys().any(|h| h != "Host") {
-            return Err(bad("Only the WebSocket Host header is supported."));
+        for (name, value) in &ws.headers {
+            if name.is_empty()
+                || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                || value.contains(['\r', '\n'])
+            {
+                return Err(bad("Invalid WebSocket HTTP header."));
+            }
         }
     }
     if let Some(r) = &p.reality_opts
-        && (!p.tls
+        && (p.kind != "vless"
+            || !p.tls
             || p.client_fingerprint.is_empty()
             || URL_SAFE_NO_PAD
                 .decode(&r.public_key)
@@ -307,4 +372,29 @@ pub async fn fetch(raw_url: &str) -> Result<Vec<Proxy>> {
     }
     let input = String::from_utf8(bytes).map_err(|_| bad("Subscription is not UTF-8."))?;
     parse(&input)
+}
+
+pub fn normalize(p: &mut Proxy) -> Result<()> {
+    if let Some(sni) = p.options.remove("sni") {
+        let sni = sni.as_str().ok_or_else(|| bad("SNI must be a string."))?;
+        if !p.servername.is_empty() && p.servername != sni {
+            return Err(bad("Conflicting SNI fields."));
+        }
+        p.servername = sni.into();
+    }
+    if p.network.is_empty() {
+        p.network = "tcp".into();
+    }
+    if ["hysteria", "hysteria2", "trojan"].contains(&p.kind.as_str()) {
+        p.tls = true;
+    }
+    Ok(())
+}
+pub fn require_verified_tls(proxies: &[Proxy], allow: bool) -> Result<()> {
+    if !allow && proxies.iter().any(Proxy::unverified_tls) {
+        return Err(bad(
+            "This import disables server TLS verification. Use a certificate pin or explicitly allow unverified server TLS in the import dialog.",
+        ));
+    }
+    Ok(())
 }

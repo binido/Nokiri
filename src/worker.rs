@@ -34,8 +34,8 @@ pub enum Action {
     Stop,
     Restart,
     Select(String),
-    Import(String),
-    AddSubscription(String, String),
+    Import(String, bool),
+    AddSubscription(String, String, bool),
     Update(String),
     Rename(String, String),
     RemoveSubscription(String),
@@ -225,8 +225,9 @@ impl Worker {
                 self.snapshot.message =
                     "Server selected. This selection stays fixed until you change it.".into();
             }
-            Action::Import(input) => {
+            Action::Import(input, allow) => {
                 let proxies = subscription::parse(&input)?;
+                subscription::require_verified_tls(&proxies, allow)?;
                 let mut all: Vec<_> = candidate
                     .servers
                     .iter()
@@ -238,9 +239,10 @@ impl Worker {
                 self.refresh(candidate).await?;
                 self.snapshot.message = "Servers imported. Select a server to use it.".into();
             }
-            Action::AddSubscription(name, url) => {
+            Action::AddSubscription(name, url, allow) => {
                 validate_name(&name)?;
                 let proxies = subscription::fetch(&url).await?;
+                subscription::require_verified_tls(&proxies, allow)?;
                 let id = uuid::Uuid::new_v4().to_string();
                 candidate.replace_source(&id, proxies);
                 candidate.subscriptions.push(Subscription {
@@ -249,6 +251,7 @@ impl Worker {
                     url,
                     updated: Some(now()),
                     status: "Updated successfully".into(),
+                    allow_unverified_tls: allow,
                 });
                 self.refresh(candidate).await?;
                 self.snapshot.message = "Subscription added.".into();
@@ -261,6 +264,10 @@ impl Worker {
                     .ok_or_else(|| anyhow::anyhow!("Subscription no longer exists"))?;
                 match subscription::fetch(&candidate.subscriptions[index].url).await {
                     Ok(proxies) => {
+                        subscription::require_verified_tls(
+                            &proxies,
+                            candidate.subscriptions[index].allow_unverified_tls,
+                        )?;
                         candidate.replace_source(&id, proxies);
                         candidate.subscriptions[index].updated = Some(now());
                         candidate.subscriptions[index].status = "Updated successfully".into();
@@ -401,6 +408,7 @@ mod tests {
             url: "https://127.0.0.1:1/private-token".into(),
             updated: Some(1),
             status: "Previous success".into(),
+            allow_unverified_tls: false,
         });
         let (updates, _) = mpsc::channel();
         Worker {

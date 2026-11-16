@@ -28,6 +28,7 @@ pub struct Nokiri {
     renames: BTreeMap<String, String>,
     draft: Settings,
     show_input: bool,
+    allow_unverified_tls: bool,
     initialized: bool,
     pending: bool,
     logo: egui::TextureHandle,
@@ -82,6 +83,7 @@ impl Nokiri {
             renames: BTreeMap::new(),
             draft: Settings::default(),
             show_input: false,
+            allow_unverified_tls: false,
             initialized: false,
             pending: false,
             logo,
@@ -314,7 +316,7 @@ impl Nokiri {
             );
             ui.label(
                 RichText::new(
-                    selected.map_or("Import a subscription or VLESS URL to get started.", |s| {
+                    selected.map_or("Import a subscription or proxy URL to get started.", |s| {
                         self.snapshot.state.source_name(&s.source)
                     }),
                 )
@@ -437,7 +439,7 @@ impl Nokiri {
             self.empty(
                 ui,
                 "No servers yet",
-                "Import a subscription or paste a VLESS URL.",
+                "Import a subscription or paste a proxy URL.",
             );
             return;
         }
@@ -468,20 +470,19 @@ impl Nokiri {
                     ui.label(RichText::new(&server.proxy.name).size(18.0).strong());
                     ui.label(
                         RichText::new(format!(
-                            "{source}  /  VLESS {}{}  /  {}",
-                            server.proxy.network.to_uppercase(),
-                            if server.proxy.reality_opts.is_some() {
-                                " + REALITY"
-                            } else if server.proxy.tls {
-                                " + TLS"
-                            } else {
-                                ""
-                            },
+                            "{source}  /  {}  /  {}",
+                            server.proxy.description(),
                             &server.id[..6]
                         ))
                         .small()
                         .color(self.muted()),
                     );
+                    if server.proxy.unverified_tls() {
+                        ui.colored_label(
+                            self.error_color(),
+                            "Server TLS verification is disabled for this profile",
+                        );
+                    }
                     if let Some(check) = self.snapshot.checks.get(&server.id) {
                         let status = if check.testing {
                             "Testing...".into()
@@ -558,7 +559,7 @@ impl Nokiri {
             if self.primary(ui, "Add subscription").clicked() {
                 self.open_import(true);
             }
-            if ui.button("Import VLESS / YAML").clicked() {
+            if ui.button("Import proxy / YAML").clicked() {
                 self.open_import(false);
             }
         });
@@ -718,6 +719,7 @@ impl Nokiri {
         self.input.clear();
         self.name.clear();
         self.show_input = false;
+        self.allow_unverified_tls = false;
         self.import_error = None;
     }
     fn import_dialog(&mut self, ctx: &egui::Context) {
@@ -739,13 +741,15 @@ impl Nokiri {
                             ui.add(egui::TextEdit::singleline(&mut self.input).password(!self.show_input).hint_text("https://provider.example/sub/...").desired_width(f32::INFINITY)).labelled_by(label.id);
                             ui.label(RichText::new("Fetched directly from the provider. Redirects are refused.").small().color(self.muted()));
                         } else {
-                            let label=ui.label("Paste VLESS URLs, Base64 URLs, or Clash YAML");
+                            let label=ui.label("Paste proxy URLs, Base64 subscriptions, or Clash YAML");
                             egui::ScrollArea::vertical().id_salt("import_text").max_height(180.0).show(ui,|ui| {
                                 ui.add(egui::TextEdit::multiline(&mut self.input).password(!self.show_input).desired_rows(6).desired_width(f32::INFINITY)).labelled_by(label.id);
                             });
-                            ui.label(RichText::new("VLESS over TCP, WebSocket or gRPC. TLS and REALITY supported. Other protocols and transport extensions are rejected.").small().color(self.muted()));
+                            ui.label(RichText::new("VLESS, VMess, Trojan, Shadowsocks, Hysteria 1/2, HTTP and SOCKS5. Unsupported extensions are reported explicitly.").small().color(self.muted()));
                         }
                         ui.checkbox(&mut self.show_input,"Show contents");
+                        ui.checkbox(&mut self.allow_unverified_tls,"Allow profiles without verified server TLS");
+                        if self.allow_unverified_tls { ui.colored_label(self.error_color(),"Unverified TLS cannot establish the proxy server's identity. Use only when you trust the source; a certificate pin is safer."); }
                     });
                     ui.label(RichText::new("Your catalog is encrypted with a key in the system credential store.").small().color(self.muted()));
                     if let Some(error)=&self.import_error { ui.colored_label(self.error_color(), error); }
@@ -753,7 +757,7 @@ impl Nokiri {
                 ui.horizontal_wrapped(|ui| {
                     ui.add_enabled_ui(self.available() && !self.input.trim().is_empty() && (!self.subscription_mode || !self.name.trim().is_empty()),|ui| {
                         if self.primary(ui,"Import").clicked() {
-                            let action=if self.subscription_mode { Action::AddSubscription(self.name.trim().into(),self.input.trim().into()) } else { Action::Import(self.input.trim().into()) };
+                            let action=if self.subscription_mode { Action::AddSubscription(self.name.trim().into(),self.input.trim().into(),self.allow_unverified_tls) } else { Action::Import(self.input.trim().into(),self.allow_unverified_tls) };
                             self.send(action);
                             self.import_pending=self.pending;
                         }
@@ -1013,6 +1017,7 @@ mod layout_tests {
                 url: "https://example.invalid/fixture".into(),
                 updated: None,
                 status: "Not updated".into(),
+                allow_unverified_tls: false,
             });
         for dark in [true, false] {
             app.draft.dark = dark;

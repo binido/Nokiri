@@ -34,7 +34,7 @@ fn generate_inner(
         subscription::validate(&server.proxy)?;
         let mut proxy = server.proxy.clone();
         proxy.name = server.id.clone();
-        proxies.push(proxy);
+        proxies.push(proxy.engine_value());
     }
     let groups = selected.map_or_else(Vec::new, |s| {
         vec![json!({ "name": SELECTOR, "type": "select", "proxies": [s.id] })]

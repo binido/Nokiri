@@ -61,8 +61,6 @@ fn rejects_invalid_or_unsupported_imports_without_echoing_secrets() {
         "dm1lc3M6Ly9zZWNyZXQ=",
         "proxies: []",
         "vless://secret@example.org:443",
-        "vless://00000000-0000-4000-8000-000000000001@example.org:443?type=xhttp",
-        "vless://00000000-0000-4000-8000-000000000001@example.org:443?security=tls&allowInsecure=1",
         "vless://00000000-0000-4000-8000-000000000001@example.org:443?type=ws&flow=xtls-rprx-vision",
         "vless://00000000-0000-4000-8000-000000000001@example.org:443?type=tcp&type=ws",
     ] {
