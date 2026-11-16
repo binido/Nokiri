@@ -14,6 +14,10 @@ enum Page {
     Settings,
 }
 pub struct Nokiri {
+    #[cfg(target_os = "macos")]
+    desktop: Option<crate::desktop::Desktop>,
+    #[cfg(target_os = "macos")]
+    login_error: Option<String>,
     worker: Handle,
     snapshot: Snapshot,
     page: Page,
@@ -34,8 +38,25 @@ pub struct Nokiri {
     logo: egui::TextureHandle,
 }
 impl Nokiri {
-    pub fn new(cc: &eframe::CreationContext<'_>, vault: Vault) -> Self {
-        Self::with_context(cc.egui_ctx.clone(), vault)
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        vault: Vault,
+        background: bool,
+    ) -> anyhow::Result<Self> {
+        let app = Self::with_context(cc.egui_ctx.clone(), vault);
+        #[cfg(target_os = "macos")]
+        let app = {
+            let mut app = app;
+            app.desktop = Some(crate::desktop::Desktop::new(
+                cc.egui_ctx.clone(),
+                app.worker.shutdown.clone(),
+                background,
+            )?);
+            app
+        };
+        #[cfg(not(target_os = "macos"))]
+        let _ = background;
+        Ok(app)
     }
     fn with_context(ctx: egui::Context, vault: Vault) -> Self {
         let mut fonts = egui::FontDefinitions::default();
@@ -69,6 +90,10 @@ impl Nokiri {
             Default::default(),
         );
         Self {
+            #[cfg(target_os = "macos")]
+            desktop: None,
+            #[cfg(target_os = "macos")]
+            login_error: None,
             worker: Handle::spawn(vault, ctx),
             snapshot: Snapshot::default(),
             page: Page::Dashboard,
@@ -654,6 +679,31 @@ impl Nokiri {
             self.draft.dark = dark;
             self.draft.start_on_launch = start;
         });
+        #[cfg(target_os = "macos")]
+        {
+            ui.add_space(8.0);
+            self.card().show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(RichText::new("System startup").size(20.0));
+                match nokiri::login::LoginItem::current() {
+                    Ok(item) => {
+                        let status = item.enabled();
+                        let mut enabled = status.as_ref().copied().unwrap_or_else(|_| item.path.exists());
+                        if ui.checkbox(&mut enabled, "Launch Nokiri at macOS login").changed() {
+                            self.login_error = item.set_enabled(enabled).err().map(|e| format!("{e:#}"));
+                        }
+                        if let Err(e) = status {
+                            ui.label(RichText::new(e.to_string()).color(self.error_color()));
+                        }
+                    }
+                    Err(e) => { ui.label(RichText::new(e.to_string()).color(self.error_color())); }
+                }
+                ui.label(RichText::new("Saved immediately. Starts hidden in the menu bar at your next login. Keep Nokiri.app in Applications.").small().color(self.muted()));
+                if let Some(error) = &self.login_error {
+                    ui.label(RichText::new(error).color(self.error_color()));
+                }
+            });
+        }
         ui.add_space(8.0);
         self.card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -824,6 +874,19 @@ impl Nokiri {
     fn render(&mut self, ctx: &egui::Context) {
         while let Ok(snapshot) = self.worker.rx.try_recv() {
             self.receive_snapshot(snapshot);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let available = self.available();
+            if let Some(desktop) = &mut self.desktop
+                && desktop.update(ctx, &self.snapshot, self.initialized, available)
+            {
+                self.send(if self.snapshot.running {
+                    Action::Stop
+                } else {
+                    Action::Start
+                });
+            }
         }
         self.style(ctx);
         self.navigation(ctx);

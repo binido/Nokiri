@@ -5,7 +5,11 @@ use crate::{
     subscription,
 };
 use anyhow::{Result, bail};
-use std::{collections::BTreeMap, sync::mpsc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, mpsc},
+    time::Duration,
+};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[derive(Clone, Default)]
@@ -48,8 +52,23 @@ pub enum Action {
 pub struct Handle {
     pub tx: UnboundedSender<Action>,
     pub rx: mpsc::Receiver<Snapshot>,
-    shutdown: tokio::sync::watch::Sender<bool>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    pub shutdown: Shutdown,
+}
+#[derive(Clone)]
+pub struct Shutdown {
+    signal: tokio::sync::watch::Sender<bool>,
+    thread: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
+}
+impl Shutdown {
+    pub fn requested(&self) -> bool {
+        *self.signal.borrow()
+    }
+    pub fn stop(&self) {
+        let _ = self.signal.send(true);
+        if let Some(thread) = self.thread.lock().unwrap().take() {
+            let _ = thread.join();
+        }
+    }
 }
 impl Handle {
     pub fn spawn(vault: Vault, ctx: eframe::egui::Context) -> Self {
@@ -101,17 +120,16 @@ impl Handle {
         Self {
             tx,
             rx: snapshots,
-            shutdown,
-            thread: Some(thread),
+            shutdown: Shutdown {
+                signal: shutdown,
+                thread: Arc::new(Mutex::new(Some(thread))),
+            },
         }
     }
 }
 impl Drop for Handle {
     fn drop(&mut self) {
-        let _ = self.shutdown.send(true);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.shutdown.stop();
     }
 }
 struct Worker {
@@ -421,6 +439,22 @@ mod tests {
             updates,
             ctx: eframe::egui::Context::default(),
         }
+    }
+    #[test]
+    fn native_shutdown_joins_worker_and_remains_safe_when_handle_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = Handle::spawn(
+            Vault::new(dir.path().join("catalog.enc"), Box::new(Secrets)),
+            eframe::egui::Context::default(),
+        );
+        handle.rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let shutdown = handle.shutdown.clone();
+        assert!(!shutdown.requested());
+        shutdown.stop();
+        assert!(shutdown.requested());
+        assert!(handle.tx.send(Action::Start).is_err());
+        drop(handle);
+        shutdown.stop();
     }
     #[tokio::test]
     async fn failed_subscription_update_keeps_previous_servers_selection_and_success_time() {

@@ -27,7 +27,7 @@ modified executables, startup failures, port conflicts and proxy timeouts.
 | Scenario | Executed evidence | Limits |
 | --- | --- | --- |
 | A: normal proxy operation | Local VLESS fixtures over TCP, WebSocket and gRPC; HTTPS 204 through HTTP and SOCKS5 | Fixture VLESS transports are unencrypted loopback; HTTPS destination certificate is verified |
-| B: fixed selection | Encrypted vault reload and stable identity tests; GUI quit and reopen restored the same selection | No system login / launch-agent test |
+| B: fixed selection | Encrypted vault reload and stable identity tests; GUI quit and reopen restored the same selection; background follow-up below checks launchd startup | Actual logout / login not exercised |
 | C: selected server failure | Killed selected VLESS fixture with a live backup and a directly reachable HTTPS destination; new proxied requests failed | Not an internet outage or packet-loss benchmark |
 | D: subscription update | Stable identity across rename/update; failed actual fetch preserves old catalog and update time; removed-selection worker test persists unavailable state | No production 3x-ui subscription URL was supplied |
 | E: core failure | Killed owned core; integration test detects exit and requests fail; GUI displayed the unexpected-exit message and Start control | Forced application death itself is not supervised |
@@ -97,3 +97,31 @@ both saved profiles and the existing selection, the protocol import help,
 TLS consent disabled by default, and successful Russian profile testing. The
 German profile remains unavailable. See [protocol audit](protocol-audit.md)
 for the diagnosis, dependency findings and precise validation limits.
+
+
+## Background operation follow-up (2026-11-16)
+
+- The ordinary suite passes 28 tests, including login registration, XML escaping,
+  app relocation detection, refusal to register an unpackaged executable, and
+  shared native shutdown followed by worker-handle destruction. macOS `plutil`
+  accepts the generated registration. All three ignored real-core/protocol
+  checks pass. Formatting and all-target Clippy with warnings denied pass.
+- The final application bundle builds and passes deep, strict ad-hoc signature
+  verification. The AppKit bindings were already locked dependencies; no new
+  third-party package was introduced.
+- A temporary application harness includes the production UI and desktop modules,
+  using an isolated encrypted catalog, fake secret store and local VLESS fixture.
+  No user's catalog, Keychain key or login preference was changed. HTTP requests
+  through real Mihomo succeeded with the window hidden. Closing the window kept
+  the listener alive; Cmd+Q closed both the application and its proxy listener.
+  The native app menu resolved Quit to the new graceful-exit action. The settings
+  page displayed the independent login and connection controls.
+- A generated LaunchAgent was loaded in the current GUI session with a test label
+  and the harness executable. Its hidden startup served successful HTTP and
+  SOCKS5 requests through the fixture. Unloading it stopped the app and closed
+  the listener. The test registration was unloaded afterward.
+- Actual logout / login, older macOS versions, OS-disabled background activity,
+  direct menu-bar icon clicks, and a full VoiceOver audit were not exercised.
+  The UI automation surface cannot inspect a windowless accessory app. These
+  checks do not prove the menu-bar popup or Dock presentation visually. Linux
+  retains its existing window lifecycle; the new desktop integration is macOS-only.
