@@ -77,3 +77,23 @@ failed before the fix and pass afterward. All pages were rendered at 720x560 and
 980x780 in both themes, including long names. See [design review](design-review.md)
 for findings and direct desktop checks. Current screenshots show the corrected
 first-launch UI with an empty catalog. The macOS app was rebuilt and launched.
+
+## Multiple-protocol follow-up (2026-11-16)
+
+The ordinary suite now passes 25 tests. Formatting, all-target Clippy with
+warnings denied, and diff whitespace checks pass. The separate protocol test
+passes all six checks, including official Mihomo configuration validation for
+Hysteria 1/2, VMess, Trojan, Shadowsocks, HTTPS, SOCKS5, and VLESS HTTPUpgrade,
+XHTTP, HTTP camouflage, H2 and WebSocket early data.
+
+The expanded real-core suite uses loopback fixtures, ephemeral credentials and a
+verified HTTPS destination. Hysteria 2 additionally uses Salamander and a pinned
+server certificate, rejects a wrong pin/password, and retains selection across
+restart. The same HTTP/SOCKS5, restart, dead-server/no-fallback and controller
+checks cover VLESS TCP/WS/gRPC, VMess, Trojan TLS and Shadowsocks.
+
+The macOS bundle was rebuilt and signature-verified. Native checks confirmed
+both saved profiles and the existing selection, the protocol import help,
+TLS consent disabled by default, and successful Russian profile testing. The
+German profile remains unavailable. See [protocol audit](protocol-audit.md)
+for the diagnosis, dependency findings and precise validation limits.
