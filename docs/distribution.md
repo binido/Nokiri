@@ -19,8 +19,10 @@ download or update an executable at runtime.
 
 Nokiri is **ad-hoc signed only**, with no Developer ID or notarization. Finder
 launch works locally. A downloaded copy can be blocked by Gatekeeper. Distribution
-to other people still requires a maintainer's signing and notarization workflow;
-Nokiri does not modify Gatekeeper settings. Keychain can request authorization
+as a conventional macOS download requires a maintainer's signing and notarization
+workflow. The initial v0.1.0 release is an explicitly ad-hoc signed early build;
+it does not offer that installation experience. Nokiri does not modify Gatekeeper
+settings. Keychain can request authorization
 again after an ad-hoc rebuild changes the application identity.
 
 ## Corresponding Mihomo source
@@ -48,8 +50,9 @@ Never derive runtime trust from an editable bundle manifest.
 - Run the quality checks and real-core integration tests in CONTRIBUTING.md.
 - Generate the local .app and source companion; inspect included license notices.
 - Test the app from a folder outside the source checkout.
-- For public distribution, sign both executables and bundle with a Developer ID,
-  notarize and staple using the maintainer's own Apple account.
+- For a notarized release, sign both executables and bundle with a Developer ID,
+  notarize and staple using the maintainer's own Apple account. For the initial
+  ad-hoc release, disclose the missing notarization and possible Gatekeeper block.
 - Offer the exact corresponding source companion alongside the binary download.
 
 ## GitHub Actions builds
