@@ -2,14 +2,16 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
   check:
     strategy:
       matrix:
-        os: [macos-15, ubuntu-latest]
+        os: [macos-26, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -25,6 +27,34 @@ jobs:
       - if: runner.os == 'macOS'
         run: python3 scripts/fetch_core.py
       - if: runner.os == 'macOS'
-        run: cargo test --locked --test real_core -- --ignored
+        run: cargo test --locked --test real_core --test protocols -- --ignored
       - if: runner.os == 'macOS'
         run: python3 scripts/package_macos.py
+      - name: Check macOS architecture
+        if: runner.os == 'macOS'
+        run: |
+          test "$(lipo -archs dist/Nokiri.app/Contents/MacOS/Nokiri)" = arm64
+          test "$(lipo -archs dist/Nokiri.app/Contents/Resources/mihomo)" = arm64
+      - name: Prepare corresponding Mihomo source
+        if: runner.os == 'macOS'
+        run: python3 scripts/prepare_core_source.py
+      - name: Build macOS disk image
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist/dmg
+          ditto dist/Nokiri.app dist/dmg/Nokiri.app
+          ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname Nokiri -srcfolder dist/dmg -ov -format UDZO dist/Nokiri-arm64.dmg
+          hdiutil verify dist/Nokiri-arm64.dmg
+          test -s dist/Mihomo-*-source.tar.gz
+      - name: Upload macOS build
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nokiri-macos-26-arm64
+          path: |
+            dist/Nokiri-arm64.dmg
+            dist/Mihomo-*-source.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

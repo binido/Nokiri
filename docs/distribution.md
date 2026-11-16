@@ -52,5 +52,21 @@ Never derive runtime trust from an editable bundle manifest.
   notarize and staple using the maintainer's own Apple account.
 - Offer the exact corresponding source companion alongside the binary download.
 
-CI builds and checks the app on macOS and checks shared Rust code on Linux. It
-publishes no release and uploads no private catalogs or credentials.
+## GitHub Actions builds
+
+[CI](../.github/workflows/ci.yml) runs on pushes, pull requests and manual
+`workflow_dispatch` runs. The macOS job uses the explicit `macos-26` Apple Silicon
+runner, as in [Kadro](https://github.com/binido/Kadro/blob/main/.github/workflows/release.yml).
+The Linux job continues to check shared Rust code on `ubuntu-latest`.
+
+The macOS job runs the ordinary checks and real-core protocol tests, builds the
+ad-hoc signed app, verifies both executable architectures, prepares the exact
+Mihomo source companion and creates a verified DMG with an Applications shortcut.
+Download `Nokiri-macos-26-arm64` from the workflow run's **Artifacts** section.
+It contains `Nokiri-arm64.dmg` and `Mihomo-v1.19.34-source.tar.gz`, retained for
+14 days. Keep the source companion alongside the DMG when sharing it.
+
+The workflow uploads only these build outputs and creates no GitHub release.
+It needs no signing secrets and retains read-only repository permissions.
+Developer ID signing and notarization remain outside this workflow; Gatekeeper
+can block a downloaded ad-hoc signed build.
